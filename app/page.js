@@ -8,7 +8,7 @@ const CATS = [
   { id: 'muebles', label: 'Muebles' },
   { id: 'ropa', label: 'Ropa vintage' },
   { id: 'libros', label: 'Libros' },
-  { id: 'deco', label: 'Decoración' },
+  { id: 'deco', label: 'DecoraciÃ³n' },
 ];
 
 const WHATSAPP_NUMBER = '51994859150';
@@ -35,7 +35,7 @@ export default function Home() {
   }
 
   function addToCart(id) {
-    if (cart[id]) return; // pieza única, máx 1
+    if (cart[id]) return; // pieza Ãºnica, mÃ¡x 1
     setCart({ ...cart, [id]: true });
   }
   function removeFromCart(id) {
@@ -53,8 +53,8 @@ export default function Home() {
     if (cartEntries.length === 0) return;
     const lines = ['Hola! Me interesa:', ''];
     cartEntries.forEach((p) => {
-      lines.push(`• ${p.name} — S/ ${p.price}`);
-      if (p.image_url) lines.push(p.image_url);
+      lines.push(`â€¢ ${p.name} â€” S/ ${p.price}`);
+      (p.image_urls || []).forEach((url) => lines.push(url));
     });
     lines.push('', `Total: S/ ${total}`);
     const msg = encodeURIComponent(lines.join('\n'));
@@ -65,7 +65,7 @@ export default function Home() {
     <div className="wrap">
       <header>
         <h1 className="logo">FIRGO</h1>
-        <p className="tagline">muebles · ropa vintage · libros · decoración</p>
+        <p className="tagline">muebles Â· ropa vintage Â· libros Â· decoraciÃ³n</p>
 
         <div className="cats">
           {CATS.map((c) => (
@@ -79,14 +79,17 @@ export default function Home() {
           ))}
         </div>
 
-        {loading && <p style={{ opacity: 0.5 }}>Cargando catálogo…</p>}
+        {loading && <p style={{ opacity: 0.5 }}>Cargando catÃ¡logoâ€¦</p>}
 
         {!loading && (
           <div className="grid">
             {list.map((p) => (
               <div className="card" key={p.id}>
                 <div className="thumb">
-                  {p.image_url ? <img src={p.image_url} alt={p.name} /> : '🎁'}
+                  {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : 'ðŸŽ'}
+                  {p.image_urls && p.image_urls.length > 1 && (
+                    <span className="photo-badge">+{p.image_urls.length - 1}</span>
+                  )}
                 </div>
                 <div className="card-body">
                   <div className="card-cat">{CATS.find((c) => c.id === p.category)?.label || p.category}</div>
@@ -97,26 +100,26 @@ export default function Home() {
                     disabled={!!cart[p.id]}
                     onClick={() => addToCart(p.id)}
                   >
-                    {cart[p.id] ? 'Agregado ✓' : 'Agregar'}
+                    {cart[p.id] ? 'Agregado âœ“' : 'Agregar'}
                   </button>
                 </div>
               </div>
             ))}
-            {list.length === 0 && <p style={{ opacity: 0.5 }}>No hay productos en esta categoría todavía.</p>}
+            {list.length === 0 && <p style={{ opacity: 0.5 }}>No hay productos en esta categorÃ­a todavÃ­a.</p>}
           </div>
         )}
       </header>
 
       <button className="cart-fab" onClick={() => setDrawerOpen(true)}>
-        🛒 Ver carrito <span className="cart-badge">{cartCount}</span>
+        ðŸ›’ Ver carrito <span className="cart-badge">{cartCount}</span>
       </button>
 
       <div className={`overlay ${drawerOpen ? 'open' : ''}`} onClick={() => setDrawerOpen(false)} />
       <div className={`drawer ${drawerOpen ? 'open' : ''}`}>
-        <button className="close-drawer" onClick={() => setDrawerOpen(false)}>✕</button>
-        <h2>Tu selección</h2>
+        <button className="close-drawer" onClick={() => setDrawerOpen(false)}>âœ•</button>
+        <h2>Tu selecciÃ³n</h2>
         <div className="cart-items">
-          {cartEntries.length === 0 && <p className="empty-cart">Tu carrito está vacío</p>}
+          {cartEntries.length === 0 && <p className="empty-cart">Tu carrito estÃ¡ vacÃ­o</p>}
           {cartEntries.map((p) => (
             <div className="cart-item" key={p.id}>
               <div>
@@ -132,7 +135,7 @@ export default function Home() {
             <div className="cart-total">Total: S/ {total}</div>
             <button className="whatsapp-btn" onClick={sendWhatsApp}>Contactar por WhatsApp</button>
             <p style={{ fontSize: 11, opacity: 0.5, marginTop: 10, textAlign: 'center' }}>
-              ¿No te abre? Escríbenos directo al 994 859 150
+              Â¿No te abre? EscrÃ­benos directo al 994 859 150
             </p>
           </div>
         )}
