@@ -13,9 +13,13 @@ export default function Admin() {
   const [description, setDescription] = useState('');
   const [medidas, setMedidas] = useState('');
   const [price, setPrice] = useState('');
+  const [originalPrice, setOriginalPrice] = useState('');
+  const [discountPct, setDiscountPct] = useState('');
   const [selectedCats, setSelectedCats] = useState([]);
   const [files, setFiles] = useState([]);
   const [status, setStatus] = useState(null);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateLog, setMigrateLog] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [newCatName, setNewCatName] = useState('');
@@ -25,8 +29,12 @@ export default function Admin() {
   const [editDescription, setEditDescription] = useState('');
   const [editMedidas, setEditMedidas] = useState('');
   const [editPrice, setEditPrice] = useState('');
+  const [editOriginalPrice, setEditOriginalPrice] = useState('');
+  const [editDiscountPct, setEditDiscountPct] = useState('');
   const [editCats, setEditCats] = useState([]);
   const [editSold, setEditSold] = useState(false);
+  const [editPhotos, setEditPhotos] = useState([]); // [{kind:'existing', url}] o [{kind:'new', file}]
+  const [editRemovedUrls, setEditRemovedUrls] = useState([]);
 
   useEffect(() => {
     if (unlocked) {
@@ -64,6 +72,106 @@ export default function Admin() {
     else setList([...list, id]);
   }
 
+  function pctFromPrices(original, promo) {
+    const o = Number(original);
+    const pr = Number(promo);
+    if (!o || !pr) return '';
+    return String(Math.round((1 - pr / o) * 100));
+  }
+  function promoFromPct(original, pct) {
+    const o = Number(original);
+    const pc = Number(pct);
+    if (!o || (!pc && pc !== 0)) return '';
+    return String(Math.round(o * (1 - pc / 100)));
+  }
+
+  function moveItem(list, setList, index, direction) {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= list.length) return;
+    const next = [...list];
+    [next[index], next[newIndex]] = [next[newIndex], next[index]];
+    setList(next);
+  }
+
+  async function toJpegIfNeeded(file) {
+    const isJpg = /\.jpe?g$/i.test(file.name) || file.type === 'image/jpeg';
+    if (isJpg) return file;
+
+    const isHeic = /\.hei[cf]$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
+    if (isHeic) {
+      const heic2any = (await import('heic2any')).default;
+      const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
+      const blob = Array.isArray(converted) ? converted[0] : converted;
+      const newName = file.name.replace(/\.hei[cf]$/i, '.jpg');
+      return new File([blob], newName, { type: 'image/jpeg' });
+    }
+
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+    return new File([blob], newName, { type: 'image/jpeg' });
+  }
+
+  function isNonJpgUrl(url) {
+    return !/\.jpe?g(\?|$)/i.test(url);
+  }
+
+  async function migrateHeicPhotos() {
+    setMigrating(true);
+    setMigrateLog('Buscando fotos que no sean JPG...');
+    let convertedCount = 0;
+    let errorCount = 0;
+
+    for (const p of products) {
+      const urls = p.image_urls || [];
+      if (!urls.some(isNonJpgUrl)) continue;
+
+      const newUrls = [];
+      for (const url of urls) {
+        if (!isNonJpgUrl(url)) {
+          newUrls.push(url);
+          continue;
+        }
+        try {
+          setMigrateLog('Convirtiendo foto de "' + p.name + '"...');
+          const res = await fetch(url);
+          const blob = await res.blob();
+          const guessedExt = (url.split('.').pop() || 'img').split('?')[0];
+          const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
+          const jpgFile = await toJpegIfNeeded(oldFile);
+          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
+          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
+          if (uploadError) throw uploadError;
+          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+          newUrls.push(pub.publicUrl);
+          const oldPath = url.split('/product-images/')[1];
+          if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
+          convertedCount++;
+        } catch (err) {
+          newUrls.push(url);
+          errorCount++;
+        }
+      }
+
+      await supabase.from('products').update({ image_urls: newUrls }).eq('id', p.id);
+    }
+
+    setMigrateLog(
+      convertedCount === 0 && errorCount === 0
+        ? 'No se encontraron fotos pendientes de convertir. Todo en orden.'
+        : convertedCount + ' foto(s) convertida(s).' + (errorCount > 0 ? ' ' + errorCount + ' con error.' : '')
+    );
+    setMigrating(false);
+    loadProducts();
+  }
+
   async function addCategory() {
     const label = newCatName.trim();
     if (!label) return;
@@ -99,7 +207,8 @@ export default function Admin() {
 
     let image_urls = [];
     try {
-      for (const f of files) {
+      for (const rawFile of files) {
+        const f = await toJpegIfNeeded(rawFile);
         const ext = f.name.split('.').pop();
         const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
         const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
@@ -113,6 +222,7 @@ export default function Admin() {
         description,
         medidas,
         price: Number(price),
+        original_price: selectedCats.includes('sale') && originalPrice ? Number(originalPrice) : null,
         categories: selectedCats,
         image_urls,
         sold: false,
@@ -124,6 +234,8 @@ export default function Admin() {
       setDescription('');
       setMedidas('');
       setPrice('');
+      setOriginalPrice('');
+      setDiscountPct('');
       setSelectedCats([]);
       setFiles([]);
       loadProducts();
@@ -149,30 +261,57 @@ export default function Admin() {
     setEditDescription(p.description || '');
     setEditMedidas(p.medidas || '');
     setEditPrice(p.price != null ? String(p.price) : '');
+    setEditOriginalPrice(p.original_price != null ? String(p.original_price) : '');
+    setEditDiscountPct(p.original_price ? pctFromPrices(p.original_price, p.price) : '');
     setEditCats(p.categories || []);
     setEditSold(!!p.sold);
+    setEditPhotos((p.image_urls || []).map((url) => ({ kind: 'existing', url })));
+    setEditRemovedUrls([]);
   }
   function cancelEdit() {
     setEditingId(null);
   }
   async function saveEdit(id) {
-    const { error } = await supabase
-      .from('products')
-      .update({
-        name: editName,
-        description: editDescription,
-        medidas: editMedidas,
-        price: Number(editPrice),
-        categories: editCats,
-        sold: editSold,
-      })
-      .eq('id', id);
-    if (error) {
-      setStatus({ type: 'error', msg: 'Error: ' + error.message });
-      return;
+    setStatus(null);
+    try {
+      const finalUrls = [];
+      for (const item of editPhotos) {
+        if (item.kind === 'existing') {
+          finalUrls.push(item.url);
+        } else {
+          const f = await toJpegIfNeeded(item.file);
+          const ext = f.name.split('.').pop();
+          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
+          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
+          if (uploadError) throw uploadError;
+          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+          finalUrls.push(pub.publicUrl);
+        }
+      }
+
+      const { error } = await supabase
+        .from('products')
+        .update({
+          name: editName,
+          description: editDescription,
+          medidas: editMedidas,
+          price: Number(editPrice),
+          original_price: editCats.includes('sale') && editOriginalPrice ? Number(editOriginalPrice) : null,
+          categories: editCats,
+          sold: editSold,
+          image_urls: finalUrls,
+        })
+        .eq('id', id);
+      if (error) throw error;
+
+      const pathsToRemove = editRemovedUrls.map((u) => u.split('/product-images/')[1]).filter(Boolean);
+      if (pathsToRemove.length > 0) await supabase.storage.from('product-images').remove(pathsToRemove);
+
+      setEditingId(null);
+      loadProducts();
+    } catch (err) {
+      setStatus({ type: 'error', msg: 'Error: ' + err.message });
     }
-    setEditingId(null);
-    loadProducts();
   }
 
   if (!unlocked) {
@@ -199,6 +338,22 @@ export default function Admin() {
 
   return (
     <div className="admin-wrap">
+      <div className="admin-card">
+        <h1>Herramientas</h1>
+        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
+          {'Convierte a JPG las fotos que hayas subido antes en otro formato (HEIC, PNG, WEBP, etc), para que se vean bien en todos los navegadores.'}
+        </p>
+        <button
+          type="button"
+          onClick={migrateHeicPhotos}
+          disabled={migrating}
+          style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
+        >
+          {migrating ? 'Convirtiendo...' : 'Convertir fotos que no sean JPG'}
+        </button>
+        {migrateLog && <p style={{ fontSize: 13, marginTop: 10 }}>{migrateLog}</p>}
+      </div>
+
       <div className="admin-card">
         <h1>Categorias</h1>
         <div className="cat-checks">
@@ -234,9 +389,6 @@ export default function Admin() {
           <label>Medidas</label>
           <input value={medidas} onChange={(e) => setMedidas(e.target.value)} placeholder="Ej: 60 x 40 x 90 cm" style={{ gridColumn: '1/-1' }} />
 
-          <label>Precio (S/)</label>
-          <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
-
           <label>Categorias (puedes elegir varias)</label>
           <div className="cat-checks" style={{ gridColumn: '1/-1' }}>
             {cats.map((c) => (
@@ -251,17 +403,72 @@ export default function Admin() {
             ))}
           </div>
 
+          {selectedCats.includes('sale') ? (
+            <>
+              <label>Precio anterior (S/)</label>
+              <input
+                type="number"
+                value={originalPrice}
+                onChange={(e) => {
+                  setOriginalPrice(e.target.value);
+                  if (discountPct !== '') setPrice(promoFromPct(e.target.value, discountPct));
+                }}
+              />
+
+              <label>{'% descuento (opcional, calcula el precio promo)'}</label>
+              <input
+                type="number"
+                value={discountPct}
+                onChange={(e) => {
+                  setDiscountPct(e.target.value);
+                  setPrice(promoFromPct(originalPrice, e.target.value));
+                }}
+                style={{ gridColumn: '1/-1' }}
+              />
+
+              <label>Precio promo (S/)</label>
+              <input
+                type="number"
+                value={price}
+                onChange={(e) => {
+                  setPrice(e.target.value);
+                  setDiscountPct(pctFromPrices(originalPrice, e.target.value));
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <label>Precio (S/)</label>
+              <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
+            </>
+          )}
+
           <label>Fotos (1 a 8)</label>
           <input
             type="file"
             accept="image/*"
             multiple
-            onChange={(e) => setFiles(Array.from(e.target.files).slice(0, 8))}
+            onChange={async (e) => {
+              const selected = Array.from(e.target.files).slice(0, 8);
+              setStatus({ type: 'ok', msg: 'Procesando fotos...' });
+              const converted = await Promise.all(selected.map((f) => toJpegIfNeeded(f)));
+              setFiles(converted);
+              setStatus(null);
+            }}
           />
           {files.length > 0 && (
-            <p style={{ fontSize: 12, opacity: 0.6, gridColumn: '1/-1', margin: '-4px 0 0' }}>
-              {files.length} foto{files.length > 1 ? 's' : ''} seleccionada{files.length > 1 ? 's' : ''}
-            </p>
+            <div className="photo-preview-row" style={{ gridColumn: '1/-1' }}>
+              {files.map((f, i) => (
+                <div key={i} className="photo-preview-item">
+                  <img src={URL.createObjectURL(f)} alt={f.name} />
+                  <div className="photo-preview-controls">
+                    <button type="button" disabled={i === 0} onClick={() => moveItem(files, setFiles, i, -1)}>{'<'}</button>
+                    <span>{i + 1}</span>
+                    <button type="button" disabled={i === files.length - 1} onClick={() => moveItem(files, setFiles, i, 1)}>{'>'}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
 
           <button type="submit" disabled={saving}>
@@ -306,9 +513,6 @@ export default function Admin() {
                 <label>Medidas</label>
                 <input value={editMedidas} onChange={(e) => setEditMedidas(e.target.value)} style={{ gridColumn: '1/-1' }} />
 
-                <label>Precio (S/)</label>
-                <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} />
-
                 <label>Categorias</label>
                 <div className="cat-checks" style={{ gridColumn: '1/-1' }}>
                   {cats.map((c) => (
@@ -323,10 +527,98 @@ export default function Admin() {
                   ))}
                 </div>
 
+                {editCats.includes('sale') ? (
+                  <>
+                    <label>Precio anterior (S/)</label>
+                    <input
+                      type="number"
+                      value={editOriginalPrice}
+                      onChange={(e) => {
+                        setEditOriginalPrice(e.target.value);
+                        if (editDiscountPct !== '') setEditPrice(promoFromPct(e.target.value, editDiscountPct));
+                      }}
+                    />
+
+                    <label>{'% descuento (opcional, calcula el precio promo)'}</label>
+                    <input
+                      type="number"
+                      value={editDiscountPct}
+                      onChange={(e) => {
+                        setEditDiscountPct(e.target.value);
+                        setEditPrice(promoFromPct(editOriginalPrice, e.target.value));
+                      }}
+                      style={{ gridColumn: '1/-1' }}
+                    />
+
+                    <label>Precio promo (S/)</label>
+                    <input
+                      type="number"
+                      value={editPrice}
+                      onChange={(e) => {
+                        setEditPrice(e.target.value);
+                        setEditDiscountPct(pctFromPrices(editOriginalPrice, e.target.value));
+                      }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <label>Precio (S/)</label>
+                    <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} />
+                  </>
+                )}
+
                 <label className="cat-check" style={{ gridColumn: '1/-1' }}>
                   <input type="checkbox" checked={editSold} onChange={(e) => setEditSold(e.target.checked)} />
                   Marcar como VENDIDO
                 </label>
+
+                {editPhotos.length > 0 && (
+                  <>
+                    <label style={{ gridColumn: '1/-1' }}>Fotos (arrastra el orden con las flechas, la "x" borra)</label>
+                    <div className="photo-preview-row" style={{ gridColumn: '1/-1' }}>
+                      {editPhotos.map((item, i) => (
+                        <div key={item.kind === 'existing' ? item.url : 'new-' + i} className="photo-preview-item">
+                          <button
+                            type="button"
+                            className="photo-remove-btn"
+                            onClick={() => {
+                              if (item.kind === 'existing') setEditRemovedUrls([...editRemovedUrls, item.url]);
+                              setEditPhotos(editPhotos.filter((_, idx) => idx !== i));
+                            }}
+                          >
+                            {'\u2715'}
+                          </button>
+                          <img src={item.kind === 'existing' ? item.url : URL.createObjectURL(item.file)} alt={'foto ' + (i + 1)} />
+                          <div className="photo-preview-controls">
+                            <button type="button" disabled={i === 0} onClick={() => moveItem(editPhotos, setEditPhotos, i, -1)}>{'<'}</button>
+                            <span>{i + 1}</span>
+                            <button type="button" disabled={i === editPhotos.length - 1} onClick={() => moveItem(editPhotos, setEditPhotos, i, 1)}>{'>'}</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {editPhotos.length < 8 && (
+                  <>
+                    <label style={{ gridColumn: '1/-1' }}>{'Agregar fotos (hasta ' + (8 - editPhotos.length) + ' mas)'}</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ gridColumn: '1/-1' }}
+                      onChange={async (e) => {
+                        const selected = Array.from(e.target.files).slice(0, 8 - editPhotos.length);
+                        setStatus({ type: 'ok', msg: 'Procesando fotos...' });
+                        const converted = await Promise.all(selected.map((f) => toJpegIfNeeded(f)));
+                        setEditPhotos([...editPhotos, ...converted.map((file) => ({ kind: 'new', file }))]);
+                        setStatus(null);
+                        e.target.value = '';
+                      }}
+                    />
+                  </>
+                )}
 
                 <button type="button" onClick={() => saveEdit(p.id)}>Guardar cambios</button>
                 <button type="button" onClick={cancelEdit} className="cancel-btn">Cancelar</button>
