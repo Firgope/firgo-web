@@ -11,6 +11,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [activeCat, setActiveCat] = useState('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('recent');
   const [cart, setCart] = useState({});
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [galleryProduct, setGalleryProduct] = useState(null);
@@ -97,14 +98,27 @@ export default function Home() {
     return parts;
   }
 
+  function plainName(text) {
+    return text.replace(/\*\*/g, '').replace(/\*/g, '');
+  }
+
+  function discountInfo(p) {
+    const hasDiscount = (p.categories || []).includes('sale') && p.original_price && Number(p.original_price) > Number(p.price);
+    if (!hasDiscount) return null;
+    const pct = Math.round((1 - Number(p.price) / Number(p.original_price)) * 100);
+    return pct;
+  }
+
   const searchLower = search.trim().toLowerCase();
-  const list = products.filter((p) => {
+  let list = products.filter((p) => {
     const matchesCat = activeCat === 'all' || (p.categories || []).includes(activeCat);
     if (!matchesCat) return false;
     if (!searchLower) return true;
     const haystack = ((p.name || '') + ' ' + (p.description || '')).toLowerCase();
     return haystack.includes(searchLower);
   });
+  if (sortBy === 'price_asc') list = [...list].sort((a, b) => Number(a.price) - Number(b.price));
+  else if (sortBy === 'price_desc') list = [...list].sort((a, b) => Number(b.price) - Number(a.price));
 
   const cartEntries = products.filter((p) => cart[p.id]);
   const total = cartEntries.reduce((sum, p) => sum + Number(p.price), 0);
@@ -156,6 +170,14 @@ export default function Home() {
             onChange={(e) => setSearch(e.target.value)}
           />
 
+          <div className="sort-row">
+            <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+              <option value="recent">{'Mas reciente'}</option>
+              <option value="price_asc">{'Precio: menor a mayor'}</option>
+              <option value="price_desc">{'Precio: mayor a menor'}</option>
+            </select>
+          </div>
+
           <div className="cats">
             <button
               className={'cat-btn ' + (activeCat === 'all' ? 'active' : '')}
@@ -190,11 +212,15 @@ export default function Home() {
                       <span className="photo-badge">{'+' + (p.image_urls.length - 1)}</span>
                     )}
                     {p.sold && <span className="sold-stamp">VENDIDO</span>}
+                    {discountInfo(p) !== null && <span className="sale-stamp">{discountInfo(p) + '% OFF'}</span>}
                   </div>
                   <div className="card-body">
-                    <div className="card-name">{formatText(p.name)}</div>
+                    <div className="card-name" title={plainName(p.name)}>{formatText(p.name)}</div>
                     <div className="card-desc">{p.description ? formatText(p.description) : ''}</div>
-                    <div className="card-price">{'S/ ' + p.price}</div>
+                    <div className="card-price">
+                      {discountInfo(p) !== null && <span className="old-price">{'S/ ' + p.original_price}</span>}
+                      {'S/ ' + p.price}
+                    </div>
                     <div className="card-medidas">{p.medidas || ''}</div>
                     {p.sold ? (
                       <button className="add-btn sold" disabled>{'VENDIDO'}</button>
@@ -272,6 +298,9 @@ export default function Home() {
             {galleryProduct.image_urls.length > 1 && (
               <button className="gallery-nav gallery-next" onClick={nextImage}>{'>'}</button>
             )}
+          </div>
+          <div className="gallery-caption" onClick={(e) => e.stopPropagation()}>
+            {formatText(galleryProduct.name)}
           </div>
         </div>
       )}
