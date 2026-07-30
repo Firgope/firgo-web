@@ -7,7 +7,7 @@ const CATS = [
   { id: 'muebles', label: 'Muebles' },
   { id: 'ropa', label: 'Ropa vintage' },
   { id: 'libros', label: 'Libros' },
-  { id: 'deco', label: 'Decoración' },
+  { id: 'deco', label: 'DecoraciÃ³n' },
 ];
 
 export default function Admin() {
@@ -17,7 +17,7 @@ export default function Admin() {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [category, setCategory] = useState('muebles');
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [status, setStatus] = useState(null); // {type:'ok'|'error', msg}
   const [saving, setSaving] = useState(false);
 
@@ -37,7 +37,7 @@ export default function Admin() {
     if (passInput === process.env.NEXT_PUBLIC_ADMIN_PASSWORD) {
       setUnlocked(true);
     } else {
-      setStatus({ type: 'error', msg: 'Contraseña incorrecta' });
+      setStatus({ type: 'error', msg: 'ContraseÃ±a incorrecta' });
     }
   }
 
@@ -47,34 +47,38 @@ export default function Admin() {
       setStatus({ type: 'error', msg: 'Completa nombre y precio' });
       return;
     }
+    if (files.length > 8) {
+      setStatus({ type: 'error', msg: 'MÃ¡ximo 8 fotos por producto' });
+      return;
+    }
     setSaving(true);
     setStatus(null);
 
-    let image_url = null;
+    let image_urls = [];
     try {
-      if (file) {
-        const ext = file.name.split('.').pop();
-        const path = `${Date.now()}.${ext}`;
+      for (const f of files) {
+        const ext = f.name.split('.').pop();
+        const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
         const { error: uploadError } = await supabase.storage
           .from('product-images')
-          .upload(path, file);
+          .upload(path, f);
         if (uploadError) throw uploadError;
         const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-        image_url = pub.publicUrl;
+        image_urls.push(pub.publicUrl);
       }
 
       const { error: insertError } = await supabase.from('products').insert({
         name,
         price: Number(price),
         category,
-        image_url,
+        image_urls,
       });
       if (insertError) throw insertError;
 
       setStatus({ type: 'ok', msg: 'Producto agregado' });
       setName('');
       setPrice('');
-      setFile(null);
+      setFiles([]);
       loadProducts();
     } catch (err) {
       setStatus({ type: 'error', msg: 'Error: ' + err.message });
@@ -84,12 +88,11 @@ export default function Admin() {
   }
 
   async function handleDelete(p) {
-    if (!confirm(`¿Borrar "${p.name}"?`)) return;
+    if (!confirm(`Â¿Borrar "${p.name}"?`)) return;
     await supabase.from('products').delete().eq('id', p.id);
-    if (p.image_url) {
-      const path = p.image_url.split('/product-images/')[1];
-      if (path) await supabase.storage.from('product-images').remove([path]);
-    }
+    const urls = p.image_urls || [];
+    const paths = urls.map((u) => u.split('/product-images/')[1]).filter(Boolean);
+    if (paths.length > 0) await supabase.storage.from('product-images').remove(paths);
     loadProducts();
   }
 
@@ -97,10 +100,10 @@ export default function Admin() {
     return (
       <div className="admin-wrap">
         <div className="admin-card">
-          <h1>Firgo — Admin</h1>
+          <h1>Firgo â€” Admin</h1>
           <input
             type="password"
-            placeholder="Contraseña"
+            placeholder="ContraseÃ±a"
             value={passInput}
             onChange={(e) => setPassInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && checkPassword()}
@@ -126,18 +129,28 @@ export default function Admin() {
           <label>Precio (S/)</label>
           <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
 
-          <label>Categoría</label>
+          <label>CategorÃ­a</label>
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
             {CATS.map((c) => (
               <option key={c.id} value={c.id}>{c.label}</option>
             ))}
           </select>
 
-          <label>Foto</label>
-          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
+          <label>Fotos (1 a 8)</label>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(e) => setFiles(Array.from(e.target.files).slice(0, 8))}
+          />
+          {files.length > 0 && (
+            <p style={{ fontSize: 12, opacity: 0.6, gridColumn: '1/-1', margin: '-4px 0 0' }}>
+              {files.length} foto{files.length > 1 ? 's' : ''} seleccionada{files.length > 1 ? 's' : ''}
+            </p>
+          )}
 
           <button type="submit" disabled={saving}>
-            {saving ? 'Guardando…' : '+ Publicar producto'}
+            {saving ? 'Guardandoâ€¦' : '+ Publicar producto'}
           </button>
 
           {status && <p className={`status ${status.type}`}>{status.msg}</p>}
@@ -145,18 +158,21 @@ export default function Admin() {
       </div>
 
       <div className="admin-card">
-        <h1>Catálogo actual ({products.length})</h1>
+        <h1>CatÃ¡logo actual ({products.length})</h1>
         {products.map((p) => (
           <div className="admin-list-item" key={p.id}>
-            {p.image_url ? <img src={p.image_url} alt={p.name} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--bg)' }} />}
+            {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--bg)' }} />}
             <div className="info">
               <div className="name">{p.name}</div>
-              <div className="meta">{CATS.find((c) => c.id === p.category)?.label} · S/ {p.price}</div>
+              <div className="meta">
+                {CATS.find((c) => c.id === p.category)?.label} Â· S/ {p.price}
+                {p.image_urls && p.image_urls.length > 1 ? ` Â· ${p.image_urls.length} fotos` : ''}
+              </div>
             </div>
             <button onClick={() => handleDelete(p)}>Borrar</button>
           </div>
         ))}
-        {products.length === 0 && <p style={{ opacity: 0.5 }}>Todavía no hay productos.</p>}
+        {products.length === 0 && <p style={{ opacity: 0.5 }}>TodavÃ­a no hay productos.</p>}
       </div>
     </div>
   );
