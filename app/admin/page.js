@@ -255,6 +255,25 @@ export default function Admin() {
     loadProducts();
   }
 
+  async function handleDuplicate(p) {
+    setStatus(null);
+    const { error } = await supabase.from('products').insert({
+      name: p.name + ' (copia)',
+      description: p.description || '',
+      medidas: p.medidas || '',
+      price: p.price,
+      original_price: p.original_price || null,
+      categories: p.categories || [],
+      image_urls: p.image_urls || [],
+      sold: false,
+    });
+    if (error) {
+      setStatus({ type: 'error', msg: 'Error al duplicar: ' + error.message });
+      return;
+    }
+    loadProducts();
+  }
+
   function startEdit(p) {
     setEditingId(p.id);
     setEditName(p.name || '');
@@ -494,6 +513,7 @@ export default function Admin() {
                 </div>
               </div>
               <button onClick={() => startEdit(p)} className="edit-btn">Editar</button>
+              <button onClick={() => handleDuplicate(p)} className="duplicate-btn">Duplicar</button>
               <button onClick={() => handleDelete(p)}>Borrar</button>
             </div>
 
