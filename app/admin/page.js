@@ -97,26 +97,30 @@ export default function Admin() {
     const isJpg = /\.jpe?g$/i.test(file.name) || file.type === 'image/jpeg';
     if (isJpg) return file;
 
-    const isHeic = /\.hei[cf]$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
-    if (isHeic) {
+    // Intento 1: decodificacion nativa del navegador (funciona en Safari incluso para HEIC)
+    try {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(bitmap, 0, 0);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      if (!blob) throw new Error('canvas.toBlob devolvio vacio');
+      const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+      return new File([blob], newName, { type: 'image/jpeg' });
+    } catch (nativeErr) {
+      // Intento 2: respaldo con heic2any, solo para HEIC/HEIF
+      const isHeic = /\.hei[cf]$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
+      if (!isHeic) throw nativeErr;
       const heic2any = (await import('heic2any')).default;
       const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
       const blob = Array.isArray(converted) ? converted[0] : converted;
       const newName = file.name.replace(/\.hei[cf]$/i, '.jpg');
       return new File([blob], newName, { type: 'image/jpeg' });
     }
-
-    const bitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bitmap, 0, 0);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-    const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
-    return new File([blob], newName, { type: 'image/jpeg' });
   }
 
   function isNonJpgUrl(url) {
