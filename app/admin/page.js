@@ -18,6 +18,8 @@ export default function Admin() {
   const [selectedCats, setSelectedCats] = useState([]);
   const [files, setFiles] = useState([]);
   const [status, setStatus] = useState(null);
+  const [adminSearch, setAdminSearch] = useState('');
+  const [adminCatFilter, setAdminCatFilter] = useState('all');
   const [migrating, setMigrating] = useState(false);
   const [migrateLog, setMigrateLog] = useState('');
   const [saving, setSaving] = useState(false);
@@ -508,7 +510,37 @@ export default function Admin() {
 
       <div className="admin-card">
         <h1>Catalogo actual ({products.length})</h1>
-        {products.map((p) => (
+
+        <input
+          type="text"
+          placeholder="Buscar producto por nombre..."
+          value={adminSearch}
+          onChange={(e) => setAdminSearch(e.target.value)}
+          style={{ width: '100%', padding: '10px 14px', borderRadius: 999, border: '2px solid var(--pill-bg)', fontSize: 14, marginBottom: 12, fontFamily: 'inherit' }}
+        />
+
+        <div className="cat-checks" style={{ marginBottom: 16 }}>
+          <span
+            className={'cat-chip filterable' + (adminCatFilter === 'all' ? ' active' : '')}
+            onClick={() => setAdminCatFilter('all')}
+          >
+            Todo
+          </span>
+          {cats.map((c) => (
+            <span
+              key={c.id}
+              className={'cat-chip filterable' + (adminCatFilter === c.id ? ' active' : '')}
+              onClick={() => setAdminCatFilter(c.id)}
+            >
+              {c.label}
+            </span>
+          ))}
+        </div>
+
+        {products
+          .filter((p) => adminCatFilter === 'all' || (p.categories || []).includes(adminCatFilter))
+          .filter((p) => p.name.toLowerCase().includes(adminSearch.trim().toLowerCase()))
+          .map((p) => (
           <div key={p.id} className="admin-list-item-wrap">
             <div className="admin-list-item">
               {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--pill-bg)' }} />}
