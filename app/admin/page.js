@@ -128,6 +128,7 @@ export default function Admin() {
     setMigrateLog('Buscando fotos que no sean JPG...');
     let convertedCount = 0;
     let errorCount = 0;
+    let firstErrorMsg = '';
 
     for (const p of products) {
       const urls = p.image_urls || [];
@@ -142,6 +143,7 @@ export default function Admin() {
         try {
           setMigrateLog('Convirtiendo foto de "' + p.name + '"...');
           const res = await fetch(url);
+          if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
           const blob = await res.blob();
           const guessedExt = (url.split('.').pop() || 'img').split('?')[0];
           const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
@@ -157,6 +159,8 @@ export default function Admin() {
         } catch (err) {
           newUrls.push(url);
           errorCount++;
+          if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
+          console.error('Error convirtiendo foto:', url, err);
         }
       }
 
@@ -166,7 +170,7 @@ export default function Admin() {
     setMigrateLog(
       convertedCount === 0 && errorCount === 0
         ? 'No se encontraron fotos pendientes de convertir. Todo en orden.'
-        : convertedCount + ' foto(s) convertida(s).' + (errorCount > 0 ? ' ' + errorCount + ' con error.' : '')
+        : convertedCount + ' foto(s) convertida(s).' + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
     );
     setMigrating(false);
     loadProducts();
