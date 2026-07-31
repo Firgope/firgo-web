@@ -216,7 +216,7 @@ export default function Home() {
                   </div>
                   <div className="card-body">
                     <div className="card-name" title={plainName(p.name)}>{formatText(p.name)}</div>
-                    <div className="card-desc">{p.description ? formatText(p.description) : ''}</div>
+                    <div className="card-desc" title={p.description ? plainName(p.description) : undefined}>{p.description ? formatText(p.description) : ''}</div>
                     <div className="card-price">
                       {discountInfo(p) !== null && <span className="old-price">{'S/ ' + p.original_price}</span>}
                       {'S/ ' + p.price}
