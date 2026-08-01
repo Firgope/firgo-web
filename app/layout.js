@@ -1,8 +1,24 @@
 import './globals.css';
 
 export const metadata = {
+  metadataBase: new URL('https://firgo-web.vercel.app'),
   title: 'Firgo',
-  description: 'Muebles, ropa vintage, libros y decoración',
+  description: 'Cosas cheveres para casas cheveres :) - Muebles, ropa vintage, libros y decoracion',
+  openGraph: {
+    title: 'Firgo',
+    description: 'Cosas cheveres para casas cheveres :)',
+    url: 'https://firgo-web.vercel.app',
+    siteName: 'Firgo',
+    images: [{ url: '/og-image.png', width: 1200, height: 630 }],
+    locale: 'es_PE',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Firgo',
+    description: 'Cosas cheveres para casas cheveres :)',
+    images: ['/og-image.png'],
+  },
 };
 
 export default function RootLayout({ children }) {
