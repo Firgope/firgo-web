@@ -144,50 +144,81 @@ export default function Admin() {
     return !ok;
   }
 
+  async function runWithConcurrency(items, limit, worker) {
+    let idx = 0;
+    async function runner() {
+      while (idx < items.length) {
+        const i = idx++;
+        await worker(items[i], i);
+      }
+    }
+    const runners = Array.from({ length: Math.min(limit, items.length) }, () => runner());
+    await Promise.all(runners);
+  }
+
   async function migrateHeicPhotos() {
     setMigrating(true);
-    setMigrateLog('Revisando fotos (nombre y contenido real)...');
+    setMigrateLog('Revisando fotos...');
+
+    const allRefs = [];
+    products.forEach((p) => (p.image_urls || []).forEach((url, idx) => allRefs.push({ p, url, idx })));
+
+    let checked = 0;
+    const flags = new Array(allRefs.length);
+    await runWithConcurrency(allRefs, 6, async (ref, i) => {
+      flags[i] = await needsFix(ref.url);
+      checked++;
+      setMigrateLog('Revisando fotos... (' + checked + '/' + allRefs.length + ')');
+    });
+
+    const toFix = allRefs.filter((_, i) => flags[i]);
+
+    if (toFix.length === 0) {
+      setMigrateLog('No se encontraron fotos pendientes de convertir. Todo en orden.');
+      setMigrating(false);
+      return;
+    }
+
+    const resultsByProductId = {};
+    products.forEach((p) => {
+      resultsByProductId[p.id] = [...(p.image_urls || [])];
+    });
+
     let convertedCount = 0;
     let errorCount = 0;
     let firstErrorMsg = '';
+    let done = 0;
+
+    await runWithConcurrency(toFix, 3, async (ref) => {
+      setMigrateLog('Convirtiendo foto ' + (done + 1) + ' de ' + toFix.length + ': "' + ref.p.name + '"...');
+      try {
+        const res = await fetch(ref.url);
+        if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
+        const blob = await res.blob();
+        const guessedExt = (ref.url.split('.').pop() || 'img').split('?')[0];
+        const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
+        const jpgFile = await toJpegIfNeeded(oldFile);
+        const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
+        const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
+        if (uploadError) throw uploadError;
+        const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+        resultsByProductId[ref.p.id][ref.idx] = pub.publicUrl;
+        const oldPath = ref.url.split('/product-images/')[1];
+        if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
+        convertedCount++;
+      } catch (err) {
+        errorCount++;
+        if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
+        console.error('Error convirtiendo foto:', ref.url, err);
+      }
+      done++;
+    });
 
     for (const p of products) {
-      const urls = p.image_urls || [];
-      const flags = await Promise.all(urls.map((u) => needsFix(u)));
-      if (!flags.some(Boolean)) continue;
-
-      const newUrls = [];
-      for (let i = 0; i < urls.length; i++) {
-        const url = urls[i];
-        if (!flags[i]) {
-          newUrls.push(url);
-          continue;
-        }
-        try {
-          setMigrateLog('Convirtiendo foto de "' + p.name + '"...');
-          const res = await fetch(url);
-          if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
-          const blob = await res.blob();
-          const guessedExt = (url.split('.').pop() || 'img').split('?')[0];
-          const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
-          const jpgFile = await toJpegIfNeeded(oldFile);
-          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
-          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
-          if (uploadError) throw uploadError;
-          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-          newUrls.push(pub.publicUrl);
-          const oldPath = url.split('/product-images/')[1];
-          if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
-          convertedCount++;
-        } catch (err) {
-          newUrls.push(url);
-          errorCount++;
-          if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
-          console.error('Error convirtiendo foto:', url, err);
-        }
+      const changed = JSON.stringify(resultsByProductId[p.id]) !== JSON.stringify(p.image_urls || []);
+      if (changed) {
+        await supabase.from('products').update({ image_urls: resultsByProductId[p.id] }).eq('id', p.id);
       }
-
-      await supabase.from('products').update({ image_urls: newUrls }).eq('id', p.id);
     }
 
     setMigrateLog(
