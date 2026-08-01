@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { supabase } from '../lib/supabaseClient';
 
 const WHATSAPP_NUMBER = '51994859150';
@@ -124,6 +125,14 @@ export default function Home() {
   const total = cartEntries.reduce((sum, p) => sum + Number(p.price), 0);
   const cartCount = cartEntries.length;
 
+  function shareProduct(p) {
+    const plain = plainName(p.name);
+    const lines = ['Hola! Mira este producto de Firgo:', '', '- ' + plain + ' - S/ ' + p.price];
+    if (p.image_urls && p.image_urls[0]) lines.push(p.image_urls[0]);
+    const msg = encodeURIComponent(lines.join('\n'));
+    window.open('https://wa.me/?text=' + msg, '_blank');
+  }
+
   function sendWhatsApp() {
     if (cartEntries.length === 0) return;
     const lines = ['Hola! Me interesa:', ''];
@@ -207,7 +216,17 @@ export default function Home() {
                     onClick={() => openGallery(p)}
                     style={{ cursor: p.image_urls && p.image_urls.length > 0 ? 'pointer' : 'default' }}
                   >
-                    {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : <span>{'[sin foto]'}</span>}
+                    {p.image_urls && p.image_urls[0] ? (
+                      <Image
+                        src={p.image_urls[0]}
+                        alt={p.name}
+                        fill
+                        sizes="(max-width: 600px) 50vw, 220px"
+                        style={{ objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <span>{'[sin foto]'}</span>
+                    )}
                     {p.image_urls && p.image_urls.length > 1 && (
                       <span className="photo-badge">{'+' + (p.image_urls.length - 1)}</span>
                     )}
@@ -222,17 +241,28 @@ export default function Home() {
                       {'S/ ' + p.price}
                     </div>
                     <div className="card-medidas">{p.medidas || ''}</div>
-                    {p.sold ? (
-                      <button className="add-btn sold" disabled>{'VENDIDO'}</button>
-                    ) : (
-                      <button
-                        className="add-btn"
-                        disabled={!!cart[p.id]}
-                        onClick={() => addToCart(p.id)}
-                      >
-                        {cart[p.id] ? 'Agregado' : 'Lo quiero'}
+                    <div className="card-actions">
+                      {p.sold ? (
+                        <button className="add-btn sold" disabled>{'VENDIDO'}</button>
+                      ) : (
+                        <button
+                          className="add-btn"
+                          disabled={!!cart[p.id]}
+                          onClick={() => addToCart(p.id)}
+                        >
+                          {cart[p.id] ? 'Agregado' : 'Lo quiero'}
+                        </button>
+                      )}
+                      <button className="share-btn" onClick={() => shareProduct(p)} aria-label="Compartir">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="18" cy="5" r="3" />
+                          <circle cx="6" cy="12" r="3" />
+                          <circle cx="18" cy="19" r="3" />
+                          <line x1="8.6" y1="10.6" x2="15.4" y2="6.4" />
+                          <line x1="8.6" y1="13.4" x2="15.4" y2="17.6" />
+                        </svg>
                       </button>
-                    )}
+                    </div>
                   </div>
                 </div>
               ))}
