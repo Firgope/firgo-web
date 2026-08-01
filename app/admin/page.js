@@ -129,20 +129,37 @@ export default function Admin() {
     return !/\.jpe?g(\?|$)/i.test(url);
   }
 
+  function urlLoadsOk(url) {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  }
+
+  async function needsFix(url) {
+    if (isNonJpgUrl(url)) return true;
+    const ok = await urlLoadsOk(url);
+    return !ok;
+  }
+
   async function migrateHeicPhotos() {
     setMigrating(true);
-    setMigrateLog('Buscando fotos que no sean JPG...');
+    setMigrateLog('Revisando fotos (nombre y contenido real)...');
     let convertedCount = 0;
     let errorCount = 0;
     let firstErrorMsg = '';
 
     for (const p of products) {
       const urls = p.image_urls || [];
-      if (!urls.some(isNonJpgUrl)) continue;
+      const flags = await Promise.all(urls.map((u) => needsFix(u)));
+      if (!flags.some(Boolean)) continue;
 
       const newUrls = [];
-      for (const url of urls) {
-        if (!isNonJpgUrl(url)) {
+      for (let i = 0; i < urls.length; i++) {
+        const url = urls[i];
+        if (!flags[i]) {
           newUrls.push(url);
           continue;
         }
@@ -370,7 +387,7 @@ export default function Admin() {
       <div className="admin-card">
         <h1>Herramientas</h1>
         <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
-          {'Convierte a JPG las fotos que hayas subido antes en otro formato (HEIC, PNG, WEBP, etc), para que se vean bien en todos los navegadores.'}
+          {'Convierte a JPG las fotos que hayas subido antes en otro formato (HEIC, PNG, WEBP, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
         </p>
         <button
           type="button"
@@ -480,9 +497,19 @@ export default function Admin() {
             onChange={async (e) => {
               const selected = Array.from(e.target.files).slice(0, 8);
               setStatus({ type: 'ok', msg: 'Procesando fotos...' });
-              const converted = await Promise.all(selected.map((f) => toJpegIfNeeded(f)));
-              setFiles(converted);
-              setStatus(null);
+              const results = await Promise.allSettled(selected.map((f) => toJpegIfNeeded(f)));
+              const okFiles = [];
+              const failedNames = [];
+              results.forEach((r, i) => {
+                if (r.status === 'fulfilled') okFiles.push(r.value);
+                else failedNames.push(selected[i].name);
+              });
+              setFiles(okFiles);
+              if (failedNames.length > 0) {
+                setStatus({ type: 'error', msg: 'No se pudo procesar: ' + failedNames.join(', ') + '. Prueba exportarla como JPG desde Fotos y subirla de nuevo.' });
+              } else {
+                setStatus(null);
+              }
             }}
           />
           {files.length > 0 && (
@@ -671,9 +698,19 @@ export default function Admin() {
                       onChange={async (e) => {
                         const selected = Array.from(e.target.files).slice(0, 8 - editPhotos.length);
                         setStatus({ type: 'ok', msg: 'Procesando fotos...' });
-                        const converted = await Promise.all(selected.map((f) => toJpegIfNeeded(f)));
-                        setEditPhotos([...editPhotos, ...converted.map((file) => ({ kind: 'new', file }))]);
-                        setStatus(null);
+                        const results = await Promise.allSettled(selected.map((f) => toJpegIfNeeded(f)));
+                        const okFiles = [];
+                        const failedNames = [];
+                        results.forEach((r, i) => {
+                          if (r.status === 'fulfilled') okFiles.push(r.value);
+                          else failedNames.push(selected[i].name);
+                        });
+                        setEditPhotos([...editPhotos, ...okFiles.map((file) => ({ kind: 'new', file }))]);
+                        if (failedNames.length > 0) {
+                          setStatus({ type: 'error', msg: 'No se pudo procesar: ' + failedNames.join(', ') + '. Prueba exportarla como JPG desde Fotos y subirla de nuevo.' });
+                        } else {
+                          setStatus(null);
+                        }
                         e.target.value = '';
                       }}
                     />
