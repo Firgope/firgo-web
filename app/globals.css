@@ -75,9 +75,15 @@ header{padding:0 0 10px;}
 .card-price .old-price{font-weight:600; font-size:13px; color:#999; text-decoration:line-through; margin-right:6px;}
 .card-medidas{font-size:11px; color:#888; margin-top:-2px; min-height:1.3em;}
 .add-btn{
-  margin-top:auto; background:var(--fg); color:#fff; border:none; border-radius:10px;
-  padding:9px; font-weight:700; font-size:13px; cursor:pointer;
+  margin-top:0; background:var(--fg); color:#fff; border:none; border-radius:10px;
+  padding:9px; font-weight:700; font-size:13px; cursor:pointer; flex:1;
 }
+.card-actions{display:flex; gap:6px; margin-top:auto;}
+.share-btn{
+  background:var(--pill-bg); color:var(--fg); border:none; border-radius:10px;
+  width:36px; flex-shrink:0; cursor:pointer; display:flex; align-items:center; justify-content:center;
+}
+.share-btn svg{width:16px; height:16px;}
 .add-btn:disabled{opacity:.5; cursor:default;}
 .add-btn.sold{background:#999; opacity:1;}
 .sold-stamp{
