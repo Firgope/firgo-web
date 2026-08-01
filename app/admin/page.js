@@ -186,6 +186,8 @@ export default function Admin() {
 
     let convertedCount = 0;
     let errorCount = 0;
+    let ghostCount = 0;
+    const ghostProductNames = new Set();
     let firstErrorMsg = '';
     let done = 0;
 
@@ -193,6 +195,14 @@ export default function Admin() {
       setMigrateLog('Convirtiendo foto ' + (done + 1) + ' de ' + toFix.length + ': "' + ref.p.name + '"...');
       try {
         const res = await fetch(ref.url);
+        if (res.status === 400 || res.status === 404) {
+          // El archivo ya no existe en el storage, no hay nada que convertir: se limpia la referencia
+          resultsByProductId[ref.p.id][ref.idx] = null;
+          ghostCount++;
+          ghostProductNames.add(ref.p.name);
+          done++;
+          return;
+        }
         if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
         const blob = await res.blob();
         const guessedExt = (ref.url.split('.').pop() || 'img').split('?')[0];
@@ -215,6 +225,7 @@ export default function Admin() {
     });
 
     for (const p of products) {
+      resultsByProductId[p.id] = resultsByProductId[p.id].filter((u) => u !== null);
       const changed = JSON.stringify(resultsByProductId[p.id]) !== JSON.stringify(p.image_urls || []);
       if (changed) {
         await supabase.from('products').update({ image_urls: resultsByProductId[p.id] }).eq('id', p.id);
@@ -224,7 +235,9 @@ export default function Admin() {
     setMigrateLog(
       convertedCount === 0 && errorCount === 0
         ? 'No se encontraron fotos pendientes de convertir. Todo en orden.'
-        : convertedCount + ' foto(s) convertida(s).' + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
+        : convertedCount + ' foto(s) convertida(s).'
+          + (ghostCount > 0 ? ' ' + ghostCount + ' enlace(s) roto(s) sin remedio, se quitaron de: ' + Array.from(ghostProductNames).join(', ') + '.' : '')
+          + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
     );
     setMigrating(false);
     loadProducts();
