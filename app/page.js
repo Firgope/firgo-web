@@ -138,8 +138,8 @@ export default function Home() {
 
   function shareProduct(p) {
     const plain = plainName(p.name);
-    const lines = ['Hola! Mira este producto de Firgo:', '', '- ' + plain + ' - S/ ' + p.price];
-    if (p.image_urls && p.image_urls[0]) lines.push(p.image_urls[0]);
+    const link = window.location.origin + '/p/' + p.id;
+    const lines = ['Hola! Mira este producto de Firgo:', '', '- ' + plain + ' - S/ ' + p.price, link];
     const msg = encodeURIComponent(lines.join('\n'));
     window.open('https://wa.me/?text=' + msg, '_blank');
   }
@@ -148,9 +148,10 @@ export default function Home() {
     if (cartEntries.length === 0) return;
     const lines = ['Hola! Me interesa:', ''];
     cartEntries.forEach((p) => {
-      const plainName = p.name.replace(/\*\*/g, '').replace(/\*/g, '');
-      lines.push('- ' + plainName + ' - S/ ' + p.price);
-      (p.image_urls || []).forEach((url) => lines.push(url));
+      const plainNameLocal = p.name.replace(/\*\*/g, '').replace(/\*/g, '');
+      const link = window.location.origin + '/p/' + p.id;
+      lines.push('- ' + plainNameLocal + ' - S/ ' + p.price);
+      lines.push(link);
     });
     lines.push('', 'Total: S/ ' + total);
     const msg = encodeURIComponent(lines.join('\n'));
