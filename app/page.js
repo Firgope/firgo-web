@@ -76,6 +76,17 @@ export default function Home() {
     setZoomed(false);
     setGalleryIndex((i) => (i - 1 + galleryProduct.image_urls.length) % galleryProduct.image_urls.length);
   }
+
+  useEffect(() => {
+    if (!galleryProduct) return;
+    function handleKeyDown(e) {
+      if (e.key === 'ArrowRight') nextImage();
+      else if (e.key === 'ArrowLeft') prevImage();
+      else if (e.key === 'Escape') closeGallery();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [galleryProduct, galleryIndex]);
   function handleZoomMove(e) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
@@ -151,7 +162,7 @@ export default function Home() {
       <header>
         <div className="logo-band">
           <h1 className="logo">FIRGO</h1>
-          <p className="tagline">{'Cosas ch\u00e9veres para casas ch\u00e9veres :)'}</p>
+          <p className="tagline">{'Tesoritos Vintage :)'}</p>
           <div className="contact-strip">
             <a href="https://instagram.com/firgo_pe" target="_blank" rel="noreferrer" className="contact-item">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
