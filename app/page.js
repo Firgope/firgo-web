@@ -233,6 +233,7 @@ export default function Home() {
                         src={p.image_urls[0]}
                         alt={p.name}
                         fill
+                        unoptimized
                         sizes="(max-width: 600px) 50vw, 220px"
                         style={{ objectFit: 'cover' }}
                       />
