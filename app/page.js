@@ -19,7 +19,7 @@ export default function Home() {
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [zoomed, setZoomed] = useState(false);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
-  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
 
   useEffect(() => {
     loadProducts();
@@ -44,11 +44,15 @@ export default function Home() {
     if (!error && data) setCats(data);
   }
 
+  function showToastMsg(msg) {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 1800);
+  }
+
   function addToCart(id) {
     if (cart[id]) return;
     setCart({ ...cart, [id]: true });
-    setShowToast(true);
-    setTimeout(() => setShowToast(false), 1800);
+    showToastMsg('Agregado al carrito');
   }
   function removeFromCart(id) {
     const next = { ...cart };
@@ -137,11 +141,15 @@ export default function Home() {
   const cartCount = cartEntries.length;
 
   function shareProduct(p) {
-    const plain = plainName(p.name);
     const link = window.location.origin + '/p/' + p.id;
-    const lines = ['Hola! Mira este producto de Firgo:', '', '- ' + plain + ' - S/ ' + p.price, link];
-    const msg = encodeURIComponent(lines.join('\n'));
-    window.open('https://wa.me/?text=' + msg, '_blank');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(
+        () => showToastMsg('Copiado al portapapeles'),
+        () => showToastMsg('No se pudo copiar el link')
+      );
+    } else {
+      showToastMsg('No se pudo copiar el link');
+    }
   }
 
   function sendWhatsApp() {
@@ -193,7 +201,7 @@ export default function Home() {
 
           <div className="sort-row">
             <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-              <option value="recent">{'Mas reciente'}</option>
+              <option value="recent">{'M\u00e1s reciente'}</option>
               <option value="price_asc">{'Precio: menor a mayor'}</option>
               <option value="price_desc">{'Precio: mayor a menor'}</option>
             </select>
@@ -243,8 +251,8 @@ export default function Home() {
                     {p.image_urls && p.image_urls.length > 1 && (
                       <span className="photo-badge">{'+' + (p.image_urls.length - 1)}</span>
                     )}
-                    {p.sold && <span className="sold-stamp">VENDIDO</span>}
                     {discountInfo(p) !== null && <span className="sale-stamp">{discountInfo(p) + '% OFF'}</span>}
+                    {p.sold && <span className="sold-stamp">VENDIDO</span>}
                   </div>
                   <div className="card-body">
                     <div className="card-name" title={plainName(p.name)}>{formatText(p.name)}</div>
@@ -289,7 +297,7 @@ export default function Home() {
         {'Ver carrito'} <span className="cart-badge">{cartCount}</span>
       </button>
 
-      <div className={'toast' + (showToast ? ' show' : '')}>{'Agregado al carrito'}</div>
+      <div className={'toast' + (toastMsg ? ' show' : '')}>{toastMsg}</div>
 
       <div className={'overlay ' + (drawerOpen ? 'open' : '')} onClick={() => setDrawerOpen(false)} />
       <div className={'drawer ' + (drawerOpen ? 'open' : '')}>
