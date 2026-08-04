@@ -27,6 +27,7 @@ export default function Admin() {
   const [newCatName, setNewCatName] = useState('');
 
   const [editingId, setEditingId] = useState(null);
+  const [draggedId, setDraggedId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editMedidas, setEditMedidas] = useState('');
@@ -49,6 +50,7 @@ export default function Admin() {
     const { data, error } = await supabase
       .from('products')
       .select('*')
+      .order('sort_order', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false });
     if (!error && data) setProducts(data);
   }
@@ -93,6 +95,59 @@ export default function Admin() {
     const next = [...list];
     [next[index], next[newIndex]] = [next[newIndex], next[index]];
     setList(next);
+  }
+
+  // El orden manual de productos (drag y shuffle) solo se puede editar sobre
+  // la lista completa, sin filtro de categoria ni busqueda activos: si se
+  // arrastrara sobre una lista filtrada, no habria forma confiable de saber
+  // donde insertar el producto respecto a los que estan ocultos por el filtro.
+  const reorderEnabled = adminCatFilter === 'all' && adminSearch.trim() === '';
+
+  async function persistOrder(newList) {
+    setProducts(newList);
+    await Promise.all(
+      newList.map((p, i) => supabase.from('products').update({ sort_order: i + 1 }).eq('id', p.id))
+    );
+  }
+
+  function handleDragStart(id) {
+    if (!reorderEnabled) return;
+    setDraggedId(id);
+  }
+  function handleDragOver(e) {
+    if (!reorderEnabled) return;
+    e.preventDefault();
+  }
+  async function handleDrop(targetId) {
+    if (!reorderEnabled || !draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      return;
+    }
+    const current = [...products];
+    const fromIndex = current.findIndex((p) => p.id === draggedId);
+    const toIndex = current.findIndex((p) => p.id === targetId);
+    setDraggedId(null);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = current.splice(fromIndex, 1);
+    current.splice(toIndex, 0, moved);
+    await persistOrder(current);
+  }
+
+  async function shuffleProducts() {
+    if (products.length < 2) return;
+    if (!confirm('\u00bfPoner los productos en orden aleatorio? Esto reemplaza el orden manual actual.')) return;
+    const shuffled = [...products];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    await persistOrder(shuffled);
+  }
+
+  function nextTopSortOrder() {
+    if (products.length === 0) return 1;
+    const min = Math.min(...products.map((p) => (p.sort_order == null ? 1 : p.sort_order)));
+    return min - 1;
   }
 
   async function toJpegIfNeeded(file) {
@@ -338,6 +393,7 @@ export default function Admin() {
         categories: selectedCats,
         image_urls,
         sold: false,
+        sort_order: nextTopSortOrder(),
       });
       if (insertError) throw insertError;
 
@@ -388,6 +444,7 @@ export default function Admin() {
       categories: p.categories || [],
       image_urls: p.image_urls || [],
       sold: false,
+      sort_order: nextTopSortOrder(),
     });
     if (error) {
       setStatus({ type: 'error', msg: 'Error al duplicar: ' + error.message });
@@ -631,7 +688,22 @@ export default function Admin() {
       </div>
 
       <div className="admin-card">
-        <h1>Catalogo actual ({products.length})</h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
+          <h1 style={{ margin: 0 }}>Catalogo actual ({products.length})</h1>
+          <button
+            type="button"
+            onClick={shuffleProducts}
+            disabled={products.length < 2}
+            style={{ background: '#888', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            Orden aleatorio
+          </button>
+        </div>
+        <p style={{ fontSize: 12, opacity: 0.65, marginBottom: 14 }}>
+          {reorderEnabled
+            ? 'Arrastra los productos desde el icono \u2630 para reordenarlos. Ese orden es el que se usa en el catalogo cuando el filtro dice "Mas reciente".'
+            : 'Para reordenar arrastrando o usar "Orden aleatorio", primero quita el filtro de categoria y la busqueda (el orden solo se edita sobre la lista completa).'}
+        </p>
 
         <input
           type="text"
@@ -663,8 +735,16 @@ export default function Admin() {
           .filter((p) => adminCatFilter === 'all' || (p.categories || []).includes(adminCatFilter))
           .filter((p) => p.name.toLowerCase().includes(adminSearch.trim().toLowerCase()))
           .map((p) => (
-          <div key={p.id} className="admin-list-item-wrap">
+          <div
+            key={p.id}
+            className={'admin-list-item-wrap' + (draggedId === p.id ? ' dragging' : '')}
+            draggable={reorderEnabled}
+            onDragStart={() => handleDragStart(p.id)}
+            onDragOver={handleDragOver}
+            onDrop={() => handleDrop(p.id)}
+          >
             <div className="admin-list-item">
+              {reorderEnabled && <span className="drag-handle" title="Arrastra para reordenar">{'\u2630'}</span>}
               {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--pill-bg)' }} />}
               <div className="info">
                 <div className="name">{p.name} {p.sold && <span className="sold-tag">VENDIDO</span>}</div>
