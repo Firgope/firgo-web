@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabaseClient';
+import ProductGallery from './ProductGallery';
 
 export async function generateMetadata({ params }) {
   const { data: p } = await supabase.from('products').select('*').eq('id', params.id).single();
@@ -50,8 +51,8 @@ export default async function ProductPage({ params }) {
         </a>
       </div>
       <div className="body-content" style={{ maxWidth: 480, margin: '0 auto' }}>
-        {p.image_urls && p.image_urls[0] && (
-          <img src={p.image_urls[0]} alt={plainName} style={{ width: '100%', borderRadius: 18, marginBottom: 16 }} />
+        {p.image_urls && p.image_urls.length > 0 && (
+          <ProductGallery images={p.image_urls} alt={plainName} />
         )}
         <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>{plainName}</h2>
         {p.description && <p style={{ color: '#666', marginBottom: 10 }}>{p.description}</p>}
