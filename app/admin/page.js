@@ -96,12 +96,10 @@ export default function Admin() {
   }
 
   async function toJpegIfNeeded(file) {
-    const isJpg = /\.jpe?g$/i.test(file.name) || file.type === 'image/jpeg';
-    if (isJpg) return file;
+    const isWebp = /\.webp$/i.test(file.name) || file.type === 'image/webp';
+    if (isWebp) return file;
 
-    // Intento 1: decodificacion nativa del navegador (funciona en Safari incluso para HEIC)
-    try {
-      const bitmap = await createImageBitmap(file);
+    async function encodeBitmap(bitmap) {
       const canvas = document.createElement('canvas');
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
@@ -109,24 +107,41 @@ export default function Admin() {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(bitmap, 0, 0);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
+      let ext = 'webp';
+      let type = 'image/webp';
+      if (!blob) {
+        // Respaldo: si el navegador no sabe codificar WebP, usamos JPG
+        blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+        ext = 'jpg';
+        type = 'image/jpeg';
+      }
       if (!blob) throw new Error('canvas.toBlob devolvio vacio');
-      const newName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
-      return new File([blob], newName, { type: 'image/jpeg' });
+      return { blob, ext, type };
+    }
+
+    // Intento 1: decodificacion nativa del navegador (funciona en Safari incluso para HEIC)
+    try {
+      const bitmap = await createImageBitmap(file);
+      const { blob, ext, type } = await encodeBitmap(bitmap);
+      const newName = file.name.replace(/\.[^.]+$/, '') + '.' + ext;
+      return new File([blob], newName, { type });
     } catch (nativeErr) {
       // Intento 2: respaldo con heic2any, solo para HEIC/HEIF
       const isHeic = /\.hei[cf]$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
       if (!isHeic) throw nativeErr;
       const heic2any = (await import('heic2any')).default;
-      const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
-      const blob = Array.isArray(converted) ? converted[0] : converted;
-      const newName = file.name.replace(/\.hei[cf]$/i, '.jpg');
-      return new File([blob], newName, { type: 'image/jpeg' });
+      const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+      const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
+      const bitmap = await createImageBitmap(jpegBlob);
+      const { blob, ext, type } = await encodeBitmap(bitmap);
+      const newName = file.name.replace(/\.hei[cf]$/i, '.' + ext);
+      return new File([blob], newName, { type });
     }
   }
 
   function isNonJpgUrl(url) {
-    return !/\.jpe?g(\?|$)/i.test(url);
+    return !/\.webp(\?|$)/i.test(url);
   }
 
   function urlLoadsOk(url) {
@@ -179,6 +194,21 @@ export default function Admin() {
       return;
     }
 
+    // Agrupar por URL unica: si dos productos comparten la misma foto (por
+    // ejemplo un producto duplicado), se convierte UNA sola vez y el
+    // resultado se aplica a todos los que la usan. Antes cada referencia se
+    // procesaba por separado, y si dos referencias apuntaban al mismo
+    // archivo, la primera lo borraba del storage y la segunda encontraba un
+    // 404 y perdia la foto (asi se producia el bug de "duplicar danha el
+    // original": ambos comparten URL, y el que perdia la carrera se quedaba
+    // sin foto).
+    const refsByUrl = new Map();
+    toFix.forEach((ref) => {
+      if (!refsByUrl.has(ref.url)) refsByUrl.set(ref.url, []);
+      refsByUrl.get(ref.url).push(ref);
+    });
+    const uniqueUrls = Array.from(refsByUrl.keys());
+
     const resultsByProductId = {};
     products.forEach((p) => {
       resultsByProductId[p.id] = [...(p.image_urls || [])];
@@ -191,36 +221,47 @@ export default function Admin() {
     let firstErrorMsg = '';
     let done = 0;
 
-    await runWithConcurrency(toFix, 3, async (ref) => {
-      setMigrateLog('Convirtiendo foto ' + (done + 1) + ' de ' + toFix.length + ': "' + ref.p.name + '"...');
+    await runWithConcurrency(uniqueUrls, 3, async (url) => {
+      const refsForUrl = refsByUrl.get(url);
+      const namesForLog = Array.from(new Set(refsForUrl.map((r) => r.p.name))).join(', ');
+      setMigrateLog('Convirtiendo foto ' + (done + 1) + ' de ' + uniqueUrls.length + ': "' + namesForLog + '"...');
+      let newUrl = null;
+      let isGhost = false;
       try {
-        const res = await fetch(ref.url);
+        const res = await fetch(url);
         if (res.status === 400 || res.status === 404) {
           // El archivo ya no existe en el storage, no hay nada que convertir: se limpia la referencia
-          resultsByProductId[ref.p.id][ref.idx] = null;
-          ghostCount++;
-          ghostProductNames.add(ref.p.name);
-          done++;
-          return;
+          isGhost = true;
+        } else {
+          if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
+          const blob = await res.blob();
+          const guessedExt = (url.split('.').pop() || 'img').split('?')[0];
+          const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
+          const jpgFile = await toJpegIfNeeded(oldFile);
+          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
+          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
+          if (uploadError) throw uploadError;
+          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+          newUrl = pub.publicUrl;
+          const oldPath = url.split('/product-images/')[1];
+          if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
+          convertedCount++;
         }
-        if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
-        const blob = await res.blob();
-        const guessedExt = (ref.url.split('.').pop() || 'img').split('?')[0];
-        const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
-        const jpgFile = await toJpegIfNeeded(oldFile);
-        const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
-        const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
-        if (uploadError) throw uploadError;
-        const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-        resultsByProductId[ref.p.id][ref.idx] = pub.publicUrl;
-        const oldPath = ref.url.split('/product-images/')[1];
-        if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
-        convertedCount++;
       } catch (err) {
         errorCount++;
         if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
-        console.error('Error convirtiendo foto:', ref.url, err);
+        console.error('Error convirtiendo foto:', url, err);
+        done++;
+        return;
       }
+
+      if (isGhost) {
+        ghostCount++;
+        refsForUrl.forEach((ref) => ghostProductNames.add(ref.p.name));
+      }
+      refsForUrl.forEach((ref) => {
+        resultsByProductId[ref.p.id][ref.idx] = newUrl; // null si era un enlace roto (ghost)
+      });
       done++;
     });
 
@@ -323,6 +364,16 @@ export default function Admin() {
     const urls = p.image_urls || [];
     const paths = urls.map((u) => u.split('/product-images/')[1]).filter(Boolean);
     if (paths.length > 0) await supabase.storage.from('product-images').remove(paths);
+    loadProducts();
+  }
+
+  async function toggleSold(p) {
+    setStatus(null);
+    const { error } = await supabase.from('products').update({ sold: !p.sold }).eq('id', p.id);
+    if (error) {
+      setStatus({ type: 'error', msg: 'Error: ' + error.message });
+      return;
+    }
     loadProducts();
   }
 
@@ -431,7 +482,7 @@ export default function Admin() {
       <div className="admin-card">
         <h1>Herramientas</h1>
         <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
-          {'Convierte a JPG las fotos que hayas subido antes en otro formato (HEIC, PNG, WEBP, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
+          {'Convierte a WebP (mas liviano) las fotos que hayas subido antes en otro formato (JPG, HEIC, PNG, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
         </p>
         <button
           type="button"
@@ -439,7 +490,7 @@ export default function Admin() {
           disabled={migrating}
           style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
         >
-          {migrating ? 'Convirtiendo...' : 'Convertir fotos que no sean JPG'}
+          {migrating ? 'Convirtiendo...' : 'Convertir fotos que no sean WebP'}
         </button>
         {migrateLog && <p style={{ fontSize: 13, marginTop: 10 }}>{migrateLog}</p>}
       </div>
@@ -623,6 +674,7 @@ export default function Admin() {
                   {p.image_urls && p.image_urls.length > 1 ? ' \u00b7 ' + p.image_urls.length + ' fotos' : ''}
                 </div>
               </div>
+              <button onClick={() => toggleSold(p)} className="sold-toggle-btn">{p.sold ? 'Marcar disponible' : 'Marcar vendido'}</button>
               <button onClick={() => startEdit(p)} className="edit-btn">Editar</button>
               <button onClick={() => handleDuplicate(p)} className="duplicate-btn">Duplicar</button>
               <button onClick={() => handleDelete(p)}>Borrar</button>
