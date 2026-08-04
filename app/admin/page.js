@@ -144,6 +144,13 @@ export default function Admin() {
     await persistOrder(shuffled);
   }
 
+  async function restoreOrderByDate() {
+    if (products.length < 2) return;
+    if (!confirm('\u00bfRestaurar el orden por fecha de agregado (mas reciente primero)? Esto reemplaza el orden manual actual.')) return;
+    const sorted = [...products].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    await persistOrder(sorted);
+  }
+
   function nextTopSortOrder() {
     if (products.length === 0) return 1;
     const min = Math.min(...products.map((p) => (p.sort_order == null ? 1 : p.sort_order)));
@@ -688,21 +695,31 @@ export default function Admin() {
       </div>
 
       <div className="admin-card">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
           <h1 style={{ margin: 0 }}>Catalogo actual ({products.length})</h1>
-          <button
-            type="button"
-            onClick={shuffleProducts}
-            disabled={products.length < 2}
-            style={{ background: '#888', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
-            Orden aleatorio
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={restoreOrderByDate}
+              disabled={products.length < 2}
+              style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              Restaurar orden por fecha
+            </button>
+            <button
+              type="button"
+              onClick={shuffleProducts}
+              disabled={products.length < 2}
+              style={{ background: '#888', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              Orden aleatorio
+            </button>
+          </div>
         </div>
         <p style={{ fontSize: 12, opacity: 0.65, marginBottom: 14 }}>
           {reorderEnabled
             ? 'Arrastra los productos desde el icono \u2630 para reordenarlos. Ese orden es el que se usa en el catalogo cuando el filtro dice "Mas reciente".'
-            : 'Para reordenar arrastrando o usar "Orden aleatorio", primero quita el filtro de categoria y la busqueda (el orden solo se edita sobre la lista completa).'}
+            : 'Para reordenar arrastrando, primero quita el filtro de categoria y la busqueda (el arrastre solo funciona sobre la lista completa; los botones de arriba si funcionan siempre).'}
         </p>
 
         <input
