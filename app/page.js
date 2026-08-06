@@ -6,8 +6,18 @@ import { supabase } from '../lib/supabaseClient';
 
 const WHATSAPP_NUMBER = '51994859150';
 
+// Mientras el cupo mensual de Image Optimization de Vercel siga agotado,
+// intentar la via optimizada primero y esperar a que falle (error 402) antes
+// de caer al respaldo directo agrega una espera extra a CADA foto, sin
+// ningun beneficio. Este interruptor salta ese intento y carga directo desde
+// Supabase de una vez. Cuando el cupo se reinicie (vercel.com -> cuenta ->
+// Usage -> Image Optimization - Transformations ya no dice "Exceeded free
+// resources"), volver a poner esto en true reactiva la optimizacion/cache
+// de Vercel sin tocar nada mas.
+const VERCEL_IMAGE_OPTIMIZATION_AVAILABLE = false;
+
 function ThumbImage({ src, alt }) {
-  const [optimizeFailed, setOptimizeFailed] = useState(false);
+  const [optimizeFailed, setOptimizeFailed] = useState(!VERCEL_IMAGE_OPTIMIZATION_AVAILABLE);
   if (optimizeFailed) {
     // El optimizador de imagenes de Vercel fallo (ej. cupo mensual agotado,
     // error 402). En vez de mostrar un icono roto, se carga la foto directo
