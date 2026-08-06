@@ -198,23 +198,17 @@ export default function Admin() {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(bitmap, 0, 0, width, height);
-    let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
-    let ext = 'webp';
-    let type = 'image/webp';
-    if (!blob) {
-      // Respaldo: si el navegador no sabe codificar WebP, usamos JPG
-      blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-      ext = 'jpg';
-      type = 'image/jpeg';
-    }
+    // JPEG en vez de WebP: Safari no respeta de forma confiable el
+    // parametro de calidad al codificar WebP (guarda casi sin comprimir
+    // aunque se le pida 80%), asi que las fotos seguian pesando varios MB.
+    // JPEG si respeta la calidad en todos los navegadores, y para fotos de
+    // producto sin transparencia no hay perdida visual relevante.
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
     if (!blob) throw new Error('canvas.toBlob devolvio vacio');
-    return { blob, ext, type };
+    return { blob, ext: 'jpg', type: 'image/jpeg' };
   }
 
   async function toJpegIfNeeded(file) {
-    const isWebp = /\.webp$/i.test(file.name) || file.type === 'image/webp';
-    if (isWebp) return file;
-
     // Intento 1: decodificacion nativa del navegador (funciona en Safari incluso para HEIC)
     try {
       const bitmap = await createImageBitmap(file);
@@ -236,7 +230,7 @@ export default function Admin() {
   }
 
   function isNonJpgUrl(url) {
-    return !/\.webp(\?|$)/i.test(url);
+    return !/\.jpg(\?|$)/i.test(url);
   }
 
   function urlLoadsOk(url) {
@@ -383,7 +377,7 @@ export default function Admin() {
     setCompressing(true);
     setCompressLog('Revisando tamano de las fotos...');
 
-    // Igual que la migracion a WebP: agrupar por URL unica para no
+    // Igual que la conversion de arriba: agrupar por URL unica para no
     // reprocesar (ni gastar bandwidth de mas) la misma foto varias veces
     // cuando dos productos la comparten.
     const allRefs = [];
@@ -658,7 +652,7 @@ export default function Admin() {
       <div className="admin-card">
         <h1>Herramientas</h1>
         <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
-          {'Convierte a WebP (mas liviano) las fotos que hayas subido antes en otro formato (JPG, HEIC, PNG, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
+          {'Convierte y comprime las fotos que hayas subido antes en otro formato o que hayan quedado mal (JPG viejo sin comprimir, HEIC, PNG, WebP, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
         </p>
         <button
           type="button"
@@ -666,7 +660,7 @@ export default function Admin() {
           disabled={migrating}
           style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
         >
-          {migrating ? 'Convirtiendo...' : 'Convertir fotos que no sean WebP'}
+          {migrating ? 'Convirtiendo...' : 'Convertir y comprimir fotos pendientes'}
         </button>
         {migrateLog && <p style={{ fontSize: 13, marginTop: 10 }}>{migrateLog}</p>}
 
