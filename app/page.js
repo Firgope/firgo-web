@@ -6,6 +6,27 @@ import { supabase } from '../lib/supabaseClient';
 
 const WHATSAPP_NUMBER = '51994859150';
 
+function ThumbImage({ src, alt }) {
+  const [optimizeFailed, setOptimizeFailed] = useState(false);
+  if (optimizeFailed) {
+    // El optimizador de imagenes de Vercel fallo (ej. cupo mensual agotado,
+    // error 402). En vez de mostrar un icono roto, se carga la foto directo
+    // desde su URL original como respaldo automatico, sin intervencion manual.
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+  }
+  return (
+    <Image
+      src={src}
+      alt={alt}
+      fill
+      sizes="(max-width: 600px) 50vw, 220px"
+      style={{ objectFit: 'cover' }}
+      onError={() => setOptimizeFailed(true)}
+    />
+  );
+}
+
 export default function Home() {
   const [products, setProducts] = useState([]);
   const [cats, setCats] = useState([]);
@@ -238,13 +259,7 @@ export default function Home() {
                     style={{ cursor: p.image_urls && p.image_urls.length > 0 ? 'pointer' : 'default' }}
                   >
                     {p.image_urls && p.image_urls[0] ? (
-                      <Image
-                        src={p.image_urls[0]}
-                        alt={p.name}
-                        fill
-                        sizes="(max-width: 600px) 50vw, 220px"
-                        style={{ objectFit: 'cover' }}
-                      />
+                      <ThumbImage src={p.image_urls[0]} alt={p.name} />
                     ) : (
                       <span>{'[sin foto]'}</span>
                     )}
