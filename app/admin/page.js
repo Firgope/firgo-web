@@ -22,6 +22,8 @@ export default function Admin() {
   const [adminCatFilter, setAdminCatFilter] = useState('all');
   const [migrating, setMigrating] = useState(false);
   const [migrateLog, setMigrateLog] = useState('');
+  const [compressing, setCompressing] = useState(false);
+  const [compressLog, setCompressLog] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [newCatName, setNewCatName] = useState('');
@@ -180,38 +182,38 @@ export default function Admin() {
     return min - 1;
   }
 
+  async function encodeBitmap(bitmap) {
+    const MAX_DIM = 1600;
+    let width = bitmap.width;
+    let height = bitmap.height;
+    if (width > MAX_DIM || height > MAX_DIM) {
+      const scale = MAX_DIM / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
+    let ext = 'webp';
+    let type = 'image/webp';
+    if (!blob) {
+      // Respaldo: si el navegador no sabe codificar WebP, usamos JPG
+      blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      ext = 'jpg';
+      type = 'image/jpeg';
+    }
+    if (!blob) throw new Error('canvas.toBlob devolvio vacio');
+    return { blob, ext, type };
+  }
+
   async function toJpegIfNeeded(file) {
     const isWebp = /\.webp$/i.test(file.name) || file.type === 'image/webp';
     if (isWebp) return file;
-
-    async function encodeBitmap(bitmap) {
-      const MAX_DIM = 1600;
-      let width = bitmap.width;
-      let height = bitmap.height;
-      if (width > MAX_DIM || height > MAX_DIM) {
-        const scale = MAX_DIM / Math.max(width, height);
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(bitmap, 0, 0, width, height);
-      let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
-      let ext = 'webp';
-      let type = 'image/webp';
-      if (!blob) {
-        // Respaldo: si el navegador no sabe codificar WebP, usamos JPG
-        blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-        ext = 'jpg';
-        type = 'image/jpeg';
-      }
-      if (!blob) throw new Error('canvas.toBlob devolvio vacio');
-      return { blob, ext, type };
-    }
 
     // Intento 1: decodificacion nativa del navegador (funciona en Safari incluso para HEIC)
     try {
@@ -374,6 +376,87 @@ export default function Admin() {
           + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
     );
     setMigrating(false);
+    loadProducts();
+  }
+
+  async function compressExistingPhotos() {
+    setCompressing(true);
+    setCompressLog('Revisando tamano de las fotos...');
+
+    // Igual que la migracion a WebP: agrupar por URL unica para no
+    // reprocesar (ni gastar bandwidth de mas) la misma foto varias veces
+    // cuando dos productos la comparten.
+    const allRefs = [];
+    products.forEach((p) => (p.image_urls || []).forEach((url, idx) => allRefs.push({ p, url, idx })));
+    const refsByUrl = new Map();
+    allRefs.forEach((ref) => {
+      if (!refsByUrl.has(ref.url)) refsByUrl.set(ref.url, []);
+      refsByUrl.get(ref.url).push(ref);
+    });
+    const uniqueUrls = Array.from(refsByUrl.keys());
+
+    if (uniqueUrls.length === 0) {
+      setCompressLog('No hay fotos que revisar.');
+      setCompressing(false);
+      return;
+    }
+
+    const resultsByProductId = {};
+    products.forEach((p) => {
+      resultsByProductId[p.id] = [...(p.image_urls || [])];
+    });
+
+    let resizedCount = 0;
+    let skippedCount = 0;
+    let errorCount = 0;
+    let firstErrorMsg = '';
+    let done = 0;
+
+    await runWithConcurrency(uniqueUrls, 3, async (url) => {
+      setCompressLog('Revisando foto ' + (done + 1) + ' de ' + uniqueUrls.length + '...');
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
+        const originalBlob = await res.blob();
+        const bitmap = await createImageBitmap(originalBlob);
+        if (bitmap.width <= 1600 && bitmap.height <= 1600) {
+          // Ya esta dentro del tamano objetivo, no hace falta volver a subirla
+          skippedCount++;
+          done++;
+          return;
+        }
+        const { blob, ext, type } = await encodeBitmap(bitmap);
+        const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
+        const file = new File([blob], path, { type });
+        const { error: uploadError } = await supabase.storage.from('product-images').upload(path, file);
+        if (uploadError) throw uploadError;
+        const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+        const oldPath = url.split('/product-images/')[1];
+        if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
+        refsByUrl.get(url).forEach((ref) => {
+          resultsByProductId[ref.p.id][ref.idx] = pub.publicUrl;
+        });
+        resizedCount++;
+      } catch (err) {
+        errorCount++;
+        if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
+        console.error('Error comprimiendo foto:', url, err);
+      }
+      done++;
+    });
+
+    for (const p of products) {
+      const changed = JSON.stringify(resultsByProductId[p.id]) !== JSON.stringify(p.image_urls || []);
+      if (changed) {
+        await supabase.from('products').update({ image_urls: resultsByProductId[p.id] }).eq('id', p.id);
+      }
+    }
+
+    setCompressLog(
+      resizedCount + ' foto(s) reducida(s) de tamano. ' + skippedCount + ' ya estaban dentro del limite (1600px).'
+        + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
+    );
+    setCompressing(false);
     loadProducts();
   }
 
@@ -586,6 +669,21 @@ export default function Admin() {
           {migrating ? 'Convirtiendo...' : 'Convertir fotos que no sean WebP'}
         </button>
         {migrateLog && <p style={{ fontSize: 13, marginTop: 10 }}>{migrateLog}</p>}
+
+        <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid #eee' }} />
+
+        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
+          {'Reduce el tamano de las fotos que ya estan en el catalogo (subidas antes de que empezaramos a comprimir automaticamente). Las deja igual de nitidas pero mucho mas livianas, sin tocar las que ya estan bien.'}
+        </p>
+        <button
+          type="button"
+          onClick={compressExistingPhotos}
+          disabled={compressing}
+          style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
+        >
+          {compressing ? 'Comprimiendo...' : 'Reducir tamano de fotos existentes'}
+        </button>
+        {compressLog && <p style={{ fontSize: 13, marginTop: 10 }}>{compressLog}</p>}
       </div>
 
       <div className="admin-card">
