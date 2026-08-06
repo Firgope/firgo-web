@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function Admin() {
@@ -37,6 +37,29 @@ export default function Admin() {
   const [editCats, setEditCats] = useState([]);
   const [editSold, setEditSold] = useState(false);
   const [editPhotos, setEditPhotos] = useState([]); // [{kind:'existing', url}] o [{kind:'new', file}]
+
+  // Las miniaturas de vista previa (URL.createObjectURL) se generan UNA sola
+  // vez por cada cambio real en la lista de archivos, no en cada render del
+  // componente (antes se regeneraban con cada tecla escrita en cualquier
+  // campo del formulario, lo cual es lento y deja URLs sin liberar en
+  // memoria). Se liberan automaticamente cuando la lista cambia o se
+  // desmonta el componente.
+  const filePreviewUrls = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+  useEffect(() => {
+    return () => filePreviewUrls.forEach((u) => URL.revokeObjectURL(u));
+  }, [filePreviewUrls]);
+
+  const editPhotoPreviewUrls = useMemo(
+    () => editPhotos.map((item) => (item.kind === 'existing' ? item.url : URL.createObjectURL(item.file))),
+    [editPhotos]
+  );
+  useEffect(() => {
+    return () => {
+      editPhotos.forEach((item, i) => {
+        if (item.kind !== 'existing') URL.revokeObjectURL(editPhotoPreviewUrls[i]);
+      });
+    };
+  }, [editPhotoPreviewUrls]);
   const [editRemovedUrls, setEditRemovedUrls] = useState([]);
 
   useEffect(() => {
@@ -162,13 +185,21 @@ export default function Admin() {
     if (isWebp) return file;
 
     async function encodeBitmap(bitmap) {
+      const MAX_DIM = 1600;
+      let width = bitmap.width;
+      let height = bitmap.height;
+      if (width > MAX_DIM || height > MAX_DIM) {
+        const scale = MAX_DIM / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
       const canvas = document.createElement('canvas');
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(bitmap, 0, 0);
+      ctx.drawImage(bitmap, 0, 0, width, height);
       let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
       let ext = 'webp';
       let type = 'image/webp';
@@ -381,15 +412,16 @@ export default function Admin() {
 
     let image_urls = [];
     try {
-      for (const rawFile of files) {
-        const f = await toJpegIfNeeded(rawFile);
-        const ext = f.name.split('.').pop();
-        const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
-        const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
-        if (uploadError) throw uploadError;
-        const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-        image_urls.push(pub.publicUrl);
-      }
+      image_urls = await Promise.all(
+        files.map(async (f) => {
+          const ext = f.name.split('.').pop();
+          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
+          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
+          if (uploadError) throw uploadError;
+          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
+          return pub.publicUrl;
+        })
+      );
 
       const { error: insertError } = await supabase.from('products').insert({
         name,
@@ -479,20 +511,17 @@ export default function Admin() {
   async function saveEdit(id) {
     setStatus(null);
     try {
-      const finalUrls = [];
-      for (const item of editPhotos) {
-        if (item.kind === 'existing') {
-          finalUrls.push(item.url);
-        } else {
-          const f = await toJpegIfNeeded(item.file);
-          const ext = f.name.split('.').pop();
+      const finalUrls = await Promise.all(
+        editPhotos.map(async (item) => {
+          if (item.kind === 'existing') return item.url;
+          const ext = item.file.name.split('.').pop();
           const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
-          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
+          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, item.file);
           if (uploadError) throw uploadError;
           const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-          finalUrls.push(pub.publicUrl);
-        }
-      }
+          return pub.publicUrl;
+        })
+      );
 
       const { error } = await supabase
         .from('products')
@@ -675,7 +704,14 @@ export default function Admin() {
             <div className="photo-preview-row" style={{ gridColumn: '1/-1' }}>
               {files.map((f, i) => (
                 <div key={i} className="photo-preview-item">
-                  <img src={URL.createObjectURL(f)} alt={f.name} />
+                  <button
+                    type="button"
+                    className="photo-remove-btn"
+                    onClick={() => setFiles(files.filter((_, idx) => idx !== i))}
+                  >
+                    {'\u2715'}
+                  </button>
+                  <img src={filePreviewUrls[i]} alt={f.name} />
                   <div className="photo-preview-controls">
                     <button type="button" disabled={i === 0} onClick={() => moveItem(files, setFiles, i, -1)}>{'<'}</button>
                     <span>{i + 1}</span>
@@ -868,7 +904,7 @@ export default function Admin() {
                           >
                             {'\u2715'}
                           </button>
-                          <img src={item.kind === 'existing' ? item.url : URL.createObjectURL(item.file)} alt={'foto ' + (i + 1)} />
+                          <img src={editPhotoPreviewUrls[i]} alt={'foto ' + (i + 1)} />
                           <div className="photo-preview-controls">
                             <button type="button" disabled={i === 0} onClick={() => moveItem(editPhotos, setEditPhotos, i, -1)}>{'<'}</button>
                             <span>{i + 1}</span>
