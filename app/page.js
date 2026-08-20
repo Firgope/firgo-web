@@ -22,8 +22,12 @@ function ThumbImage({ src, alt }) {
     // El optimizador de imagenes de Vercel fallo (ej. cupo mensual agotado,
     // error 402). En vez de mostrar un icono roto, se carga la foto directo
     // desde su URL original como respaldo automatico, sin intervencion manual.
+    // loading="lazy" hace que el navegador solo descargue la foto cuando el
+    // usuario se esta acercando a ella al hacer scroll, en vez de pedir las
+    // ~500 del catalogo de golpe al abrir la pagina (eso saturaba el celular
+    // y hacia que hasta los toques respondieran tarde o se perdieran).
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+    return <img src={src} alt={alt} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
   }
   return (
     <Image
@@ -123,11 +127,52 @@ export default function Home() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [galleryProduct, galleryIndex]);
+
+  // Mientras el visor de fotos esta abierto, se congela el scroll del
+  // catalogo de fondo. Sin esto, en celular el dedo mueve la pagina de atras
+  // en vez de interactuar con el visor: el toque se interpreta como gesto de
+  // scroll y los botones de siguiente/anterior no llegan a responder.
+  useEffect(() => {
+    if (!galleryProduct) return;
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prev = {
+      position: body.style.position,
+      top: body.style.top,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+    body.style.position = 'fixed';
+    body.style.top = '-' + scrollY + 'px';
+    body.style.width = '100%';
+    body.style.overflow = 'hidden';
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [galleryProduct]);
   function handleZoomMove(e) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
     setZoomPos({ x, y });
+  }
+  function toggleZoom(e) {
+    // Zoom con toque explicito (tap para agrandar, tap de nuevo para
+    // achicar) en vez de "hover" con el mouse. En celular no existe hover de
+    // verdad, y algunos navegadores lo simulan con el primer toque, dejando
+    // el zoom activado sin querer y tapando las flechas de siguiente/
+    // anterior que estan debajo de la foto ampliada. Con tap explicito esto
+    // no puede pasar: el estado de zoom solo cambia cuando el usuario toca
+    // la foto a proposito.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setZoomPos({ x, y });
+    setZoomed((z) => !z);
   }
 
   function formatText(text) {
@@ -358,16 +403,13 @@ export default function Home() {
             {galleryProduct.image_urls.length > 1 && (
               <button className="gallery-nav gallery-prev" onClick={prevImage}>{'<'}</button>
             )}
-            <div
-              className="gallery-image-wrap"
-              onMouseEnter={() => setZoomed(true)}
-              onMouseLeave={() => setZoomed(false)}
-              onMouseMove={handleZoomMove}
-            >
+            <div className="gallery-image-wrap">
               <img
                 src={galleryProduct.image_urls[galleryIndex]}
                 alt={galleryProduct.name}
                 className={'gallery-image' + (zoomed ? ' zoomed' : '')}
+                onClick={toggleZoom}
+                onMouseMove={zoomed ? handleZoomMove : undefined}
                 style={zoomed ? { transformOrigin: zoomPos.x + '% ' + zoomPos.y + '%' } : undefined}
               />
             </div>
