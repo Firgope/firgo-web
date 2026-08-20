@@ -217,6 +217,7 @@ header{padding:0 0 10px;}
   position:fixed; inset:0; background:rgba(0,0,0,.9); z-index:200;
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   padding:20px;
+  overscroll-behavior:contain; touch-action:none;
 }
 .gallery-close{
   position:absolute; top:20px; right:20px; background:rgba(255,255,255,.15); color:#fff;
@@ -236,6 +237,13 @@ header{padding:0 0 10px;}
 }
 .gallery-prev{left:10px;}
 .gallery-next{right:10px;}
+@media (max-width:640px){
+  /* En celular las flechas se hacen mas grandes y se les fuerza el area
+     tactil, para que el dedo no falle el toque. */
+  .gallery-nav{width:56px; height:56px; font-size:24px; background:rgba(255,255,255,.28); touch-action:manipulation;}
+  .gallery-prev{left:6px;}
+  .gallery-next{right:6px;}
+}
 .gallery-caption{color:#fff; margin-top:16px; font-size:14px; text-align:center; opacity:.85;}
 .gallery-counter{opacity:.6;}
 
