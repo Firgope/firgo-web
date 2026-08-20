@@ -230,7 +230,7 @@ header{padding:0 0 10px;}
 .gallery-image.zoomed{transform:scale(2.5); cursor:zoom-out;}
 .gallery-hint{opacity:.5; font-size:12px;}
 .gallery-nav{
-  position:fixed; top:50%; transform:translateY(-50%); z-index:210;
+  position:absolute; top:50%; transform:translateY(-50%); z-index:210;
   background:rgba(255,255,255,.15); color:#fff; border:none; border-radius:50%;
   width:44px; height:44px; font-size:20px; cursor:pointer; flex-shrink:0;
 }
