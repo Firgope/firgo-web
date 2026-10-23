@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { thumbUrl } from '../../../lib/photos';
 
 export default function ProductGallery({ images, alt }) {
   const [index, setIndex] = useState(0);
@@ -39,7 +40,7 @@ export default function ProductGallery({ images, alt }) {
               onClick={() => setIndex(i)}
               aria-label={'Ver foto ' + (i + 1)}
             >
-              <img src={url} alt={alt + ' miniatura ' + (i + 1)} />
+              <img src={thumbUrl(url)} alt={alt + ' miniatura ' + (i + 1)} loading="lazy" />
             </button>
           ))}
         </div>

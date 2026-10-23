@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabaseClient';
+import { thumbUrl } from '../../../lib/photos';
 import ProductGallery from './ProductGallery';
 
 export async function generateMetadata({ params }) {
@@ -7,14 +8,16 @@ export async function generateMetadata({ params }) {
     return { title: 'Producto no encontrado - Firgo' };
   }
   const plainName = p.name.replace(/\*\*/g, '').replace(/\*/g, '');
-  const photo = p.image_urls && p.image_urls[0] ? p.image_urls[0] : undefined;
+  // La vista previa del link (WhatsApp, Instagram) usa la miniatura: pesa
+  // ~150 KB, y WhatsApp suele no mostrar la imagen si es muy pesada.
+  const photo = p.image_urls && p.image_urls[0] ? thumbUrl(p.image_urls[0]) : undefined;
   return {
     title: plainName + ' - Firgo',
     description: 'S/ ' + p.price + (p.medidas ? ' - ' + p.medidas : ''),
     openGraph: {
       title: plainName,
       description: 'S/ ' + p.price,
-      images: photo ? [{ url: photo, width: 1200, height: 1200 }] : undefined,
+      images: photo ? [{ url: photo }] : undefined,
     },
     twitter: {
       card: 'summary_large_image',

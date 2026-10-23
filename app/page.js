@@ -1,42 +1,30 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Image from 'next/image';
 import { supabase } from '../lib/supabaseClient';
+import { thumbUrl } from '../lib/photos';
 
 const WHATSAPP_NUMBER = '51994859150';
 
-// Mientras el cupo mensual de Image Optimization de Vercel siga agotado,
-// intentar la via optimizada primero y esperar a que falle (error 402) antes
-// de caer al respaldo directo agrega una espera extra a CADA foto, sin
-// ningun beneficio. Este interruptor salta ese intento y carga directo desde
-// Supabase de una vez. Cuando el cupo se reinicie (vercel.com -> cuenta ->
-// Usage -> Image Optimization - Transformations ya no dice "Exceeded free
-// resources"), volver a poner esto en true reactiva la optimizacion/cache
-// de Vercel sin tocar nada mas.
-const VERCEL_IMAGE_OPTIMIZATION_AVAILABLE = false;
-
 function ThumbImage({ src, alt }) {
-  const [optimizeFailed, setOptimizeFailed] = useState(!VERCEL_IMAGE_OPTIMIZATION_AVAILABLE);
-  if (optimizeFailed) {
-    // El optimizador de imagenes de Vercel fallo (ej. cupo mensual agotado,
-    // error 402). En vez de mostrar un icono roto, se carga la foto directo
-    // desde su URL original como respaldo automatico, sin intervencion manual.
-    // loading="lazy" hace que el navegador solo descargue la foto cuando el
-    // usuario se esta acercando a ella al hacer scroll, en vez de pedir las
-    // ~500 del catalogo de golpe al abrir la pagina (eso saturaba el celular
-    // y hacia que hasta los toques respondieran tarde o se perdieran).
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt={alt} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
-  }
+  // El catalogo muestra la miniatura (~150 KB) en vez de la foto grande
+  // (~500 KB): el cuadrito mide ~180px, no hace falta mas. Ya no se usa el
+  // optimizador de Vercel: su cupo gratis se agotaba y daba error 402.
+  // Si una foto no tiene miniatura (por ejemplo, una subida antes de este
+  // cambio), se cae a la foto grande en vez de mostrar un icono roto.
+  // loading="lazy" hace que el navegador solo descargue la foto cuando el
+  // usuario se esta acercando a ella al hacer scroll.
+  const [failed, setFailed] = useState(false);
+  const thumb = thumbUrl(src);
+  // eslint-disable-next-line @next/next/no-img-element
   return (
-    <Image
-      src={src}
+    <img
+      src={failed ? src : thumb}
       alt={alt}
-      fill
-      sizes="(max-width: 600px) 50vw, 220px"
-      style={{ objectFit: 'cover' }}
-      onError={() => setOptimizeFailed(true)}
+      loading="lazy"
+      decoding="async"
+      onError={() => { if (!failed && thumb !== src) setFailed(true); }}
+      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
     />
   );
 }
@@ -126,6 +114,15 @@ export default function Home() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [galleryProduct, galleryIndex]);
+
+  // Mientras se mira una foto en el visor, se va bajando la siguiente, para
+  // que al tocar ">" aparezca al instante en vez de quedarse esperando.
+  useEffect(() => {
+    if (!galleryProduct || galleryProduct.image_urls.length < 2) return;
+    const next = galleryProduct.image_urls[(galleryIndex + 1) % galleryProduct.image_urls.length];
+    const img = new window.Image();
+    img.src = next;
   }, [galleryProduct, galleryIndex]);
 
   // Mientras el visor de fotos esta abierto, se congela el scroll del

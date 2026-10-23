@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import { thumbUrl, storagePath } from '../../lib/photos';
+
+// Plan gratis de Supabase: 1 GB para fotos.
+const STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 export default function Admin() {
   const [unlocked, setUnlocked] = useState(false);
@@ -20,10 +24,7 @@ export default function Admin() {
   const [status, setStatus] = useState(null);
   const [adminSearch, setAdminSearch] = useState('');
   const [adminCatFilter, setAdminCatFilter] = useState('all');
-  const [migrating, setMigrating] = useState(false);
-  const [migrateLog, setMigrateLog] = useState('');
-  const [compressing, setCompressing] = useState(false);
-  const [compressLog, setCompressLog] = useState('');
+  const [storageSizes, setStorageSizes] = useState(null); // { 'ruta/en/bucket.jpg': bytes }
   const [saving, setSaving] = useState(false);
 
   const [newCatName, setNewCatName] = useState('');
@@ -52,7 +53,7 @@ export default function Admin() {
   }, [filePreviewUrls]);
 
   const editPhotoPreviewUrls = useMemo(
-    () => editPhotos.map((item) => (item.kind === 'existing' ? item.url : URL.createObjectURL(item.file))),
+    () => editPhotos.map((item) => (item.kind === 'existing' ? thumbUrl(item.url) : URL.createObjectURL(item.file))),
     [editPhotos]
   );
   useEffect(() => {
@@ -68,8 +69,34 @@ export default function Admin() {
     if (unlocked) {
       loadProducts();
       loadCats();
+      loadStorage();
     }
   }, [unlocked]);
+
+  // Suma el peso de todos los archivos del bucket (recorriendo carpetas) para
+  // mostrar cuanto queda del 1 GB gratis.
+  async function loadStorage() {
+    try {
+      const sizes = {};
+      const folders = [''];
+      while (folders.length > 0) {
+        const prefix = folders.pop();
+        for (let offset = 0; ; offset += 1000) {
+          const { data, error } = await supabase.storage.from('product-images').list(prefix, { limit: 1000, offset });
+          if (error) throw error;
+          data.forEach((item) => {
+            const path = prefix ? prefix + '/' + item.name : item.name;
+            if (item.id === null) folders.push(path);
+            else sizes[path] = (item.metadata && item.metadata.size) || 0;
+          });
+          if (data.length < 1000) break;
+        }
+      }
+      setStorageSizes(sizes);
+    } catch (err) {
+      console.error('No se pudo calcular el espacio usado:', err);
+    }
+  }
 
   async function loadProducts() {
     const { data, error } = await supabase
@@ -182,12 +209,13 @@ export default function Admin() {
     return min - 1;
   }
 
-  async function encodeBitmap(bitmap) {
-    const MAX_DIM = 1600;
+  // maxDim/quality por defecto = foto grande (1600px, calidad 90). La
+  // miniatura del catalogo se pide con 800px y calidad 85 (ver uploadPhoto).
+  async function encodeBitmap(bitmap, maxDim = 1600, quality = 0.9) {
     let width = bitmap.width;
     let height = bitmap.height;
-    if (width > MAX_DIM || height > MAX_DIM) {
-      const scale = MAX_DIM / Math.max(width, height);
+    if (width > maxDim || height > maxDim) {
+      const scale = maxDim / Math.max(width, height);
       width = Math.round(width * scale);
       height = Math.round(height * scale);
     }
@@ -203,7 +231,7 @@ export default function Admin() {
     // aunque se le pida 80%), asi que las fotos seguian pesando varios MB.
     // JPEG si respeta la calidad en todos los navegadores, y para fotos de
     // producto sin transparencia no hay perdida visual relevante.
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
     if (!blob) throw new Error('canvas.toBlob devolvio vacio');
     return { blob, ext: 'jpg', type: 'image/jpeg' };
   }
@@ -229,25 +257,6 @@ export default function Admin() {
     }
   }
 
-  function isNonJpgUrl(url) {
-    return !/\.jpg(\?|$)/i.test(url);
-  }
-
-  function urlLoadsOk(url) {
-    return new Promise((resolve) => {
-      const img = new window.Image();
-      img.onload = () => resolve(true);
-      img.onerror = () => resolve(false);
-      img.src = url;
-    });
-  }
-
-  async function needsFix(url) {
-    if (isNonJpgUrl(url)) return true;
-    const ok = await urlLoadsOk(url);
-    return !ok;
-  }
-
   async function runWithConcurrency(items, limit, worker) {
     let idx = 0;
     async function runner() {
@@ -260,198 +269,72 @@ export default function Admin() {
     await Promise.all(runners);
   }
 
-  async function migrateHeicPhotos() {
-    setMigrating(true);
-    setMigrateLog('Revisando fotos...');
-
-    const allRefs = [];
-    products.forEach((p) => (p.image_urls || []).forEach((url, idx) => allRefs.push({ p, url, idx })));
-
-    let checked = 0;
-    const flags = new Array(allRefs.length);
-    await runWithConcurrency(allRefs, 6, async (ref, i) => {
-      flags[i] = await needsFix(ref.url);
-      checked++;
-      setMigrateLog('Revisando fotos... (' + checked + '/' + allRefs.length + ')');
-    });
-
-    const toFix = allRefs.filter((_, i) => flags[i]);
-
-    if (toFix.length === 0) {
-      setMigrateLog('No se encontraron fotos pendientes de convertir. Todo en orden.');
-      setMigrating(false);
-      return;
+  // Sube una foto ya convertida a JPEG (ver toJpegIfNeeded) en sus dos
+  // versiones: la grande y la miniatura del catalogo (ver lib/photos.js).
+  // Cada foto lleva un nombre unico, asi el navegador puede guardarla en
+  // cache por un ano sin riesgo de mostrar una version vieja.
+  async function uploadPhoto(file) {
+    const base = 'v2/' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    const opts = { contentType: 'image/jpeg', cacheControl: '31536000' };
+    const { error: mainError } = await supabase.storage.from('product-images').upload(base + '.jpg', file, opts);
+    if (mainError) throw mainError;
+    // Si la miniatura falla no se pierde la foto: el catalogo usa la grande.
+    try {
+      const bitmap = await createImageBitmap(file);
+      const { blob } = await encodeBitmap(bitmap, 800, 0.85);
+      const { error: thumbError } = await supabase.storage.from('product-images').upload(base + '_thumb.jpg', blob, opts);
+      if (thumbError) throw thumbError;
+    } catch (err) {
+      console.error('No se pudo crear la miniatura:', err);
     }
-
-    // Agrupar por URL unica: si dos productos comparten la misma foto (por
-    // ejemplo un producto duplicado), se convierte UNA sola vez y el
-    // resultado se aplica a todos los que la usan. Antes cada referencia se
-    // procesaba por separado, y si dos referencias apuntaban al mismo
-    // archivo, la primera lo borraba del storage y la segunda encontraba un
-    // 404 y perdia la foto (asi se producia el bug de "duplicar danha el
-    // original": ambos comparten URL, y el que perdia la carrera se quedaba
-    // sin foto).
-    const refsByUrl = new Map();
-    toFix.forEach((ref) => {
-      if (!refsByUrl.has(ref.url)) refsByUrl.set(ref.url, []);
-      refsByUrl.get(ref.url).push(ref);
-    });
-    const uniqueUrls = Array.from(refsByUrl.keys());
-
-    const resultsByProductId = {};
-    products.forEach((p) => {
-      resultsByProductId[p.id] = [...(p.image_urls || [])];
-    });
-
-    let convertedCount = 0;
-    let errorCount = 0;
-    let ghostCount = 0;
-    const ghostProductNames = new Set();
-    let firstErrorMsg = '';
-    let done = 0;
-
-    await runWithConcurrency(uniqueUrls, 3, async (url) => {
-      const refsForUrl = refsByUrl.get(url);
-      const namesForLog = Array.from(new Set(refsForUrl.map((r) => r.p.name))).join(', ');
-      setMigrateLog('Convirtiendo foto ' + (done + 1) + ' de ' + uniqueUrls.length + ': "' + namesForLog + '"...');
-      let newUrl = null;
-      let isGhost = false;
-      try {
-        const res = await fetch(url);
-        if (res.status === 400 || res.status === 404) {
-          // El archivo ya no existe en el storage, no hay nada que convertir: se limpia la referencia
-          isGhost = true;
-        } else {
-          if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
-          const blob = await res.blob();
-          const guessedExt = (url.split('.').pop() || 'img').split('?')[0];
-          const oldFile = new File([blob], 'old.' + guessedExt, { type: blob.type || 'application/octet-stream' });
-          const jpgFile = await toJpegIfNeeded(oldFile);
-          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg';
-          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, jpgFile);
-          if (uploadError) throw uploadError;
-          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-          newUrl = pub.publicUrl;
-          const oldPath = url.split('/product-images/')[1];
-          if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
-          convertedCount++;
-        }
-      } catch (err) {
-        errorCount++;
-        if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
-        console.error('Error convirtiendo foto:', url, err);
-        done++;
-        return;
-      }
-
-      if (isGhost) {
-        ghostCount++;
-        refsForUrl.forEach((ref) => ghostProductNames.add(ref.p.name));
-      }
-      refsForUrl.forEach((ref) => {
-        resultsByProductId[ref.p.id][ref.idx] = newUrl; // null si era un enlace roto (ghost)
-      });
-      done++;
-    });
-
-    for (const p of products) {
-      resultsByProductId[p.id] = resultsByProductId[p.id].filter((u) => u !== null);
-      const changed = JSON.stringify(resultsByProductId[p.id]) !== JSON.stringify(p.image_urls || []);
-      if (changed) {
-        await supabase.from('products').update({ image_urls: resultsByProductId[p.id] }).eq('id', p.id);
-      }
-    }
-
-    setMigrateLog(
-      convertedCount === 0 && errorCount === 0
-        ? 'No se encontraron fotos pendientes de convertir. Todo en orden.'
-        : convertedCount + ' foto(s) convertida(s).'
-          + (ghostCount > 0 ? ' ' + ghostCount + ' enlace(s) roto(s) sin remedio, se quitaron de: ' + Array.from(ghostProductNames).join(', ') + '.' : '')
-          + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
-    );
-    setMigrating(false);
-    loadProducts();
+    const { data: pub } = supabase.storage.from('product-images').getPublicUrl(base + '.jpg');
+    return pub.publicUrl;
   }
 
-  async function compressExistingPhotos() {
-    setCompressing(true);
-    setCompressLog('Revisando tamano de las fotos...');
-
-    // Igual que la conversion de arriba: agrupar por URL unica para no
-    // reprocesar (ni gastar bandwidth de mas) la misma foto varias veces
-    // cuando dos productos la comparten.
-    const allRefs = [];
-    products.forEach((p) => (p.image_urls || []).forEach((url, idx) => allRefs.push({ p, url, idx })));
-    const refsByUrl = new Map();
-    allRefs.forEach((ref) => {
-      if (!refsByUrl.has(ref.url)) refsByUrl.set(ref.url, []);
-      refsByUrl.get(ref.url).push(ref);
-    });
-    const uniqueUrls = Array.from(refsByUrl.keys());
-
-    if (uniqueUrls.length === 0) {
-      setCompressLog('No hay fotos que revisar.');
-      setCompressing(false);
-      return;
-    }
-
-    const resultsByProductId = {};
-    products.forEach((p) => {
-      resultsByProductId[p.id] = [...(p.image_urls || [])];
-    });
-
-    let resizedCount = 0;
-    let skippedCount = 0;
-    let errorCount = 0;
-    let firstErrorMsg = '';
-    let done = 0;
-
-    await runWithConcurrency(uniqueUrls, 3, async (url) => {
-      setCompressLog('Revisando foto ' + (done + 1) + ' de ' + uniqueUrls.length + '...');
+  // Sube varias fotos, de a 3 a la vez, respetando el orden. Si alguna
+  // falla, se borran las que ya habian subido y se avisa el error: asi no
+  // quedan archivos sueltos ocupando espacio.
+  async function uploadPhotos(fileList) {
+    const urls = new Array(fileList.length);
+    let failure = null;
+    await runWithConcurrency(fileList, 3, async (f, i) => {
+      if (failure) return;
       try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('fetch fallo con status ' + res.status);
-        const originalBlob = await res.blob();
-        const bitmap = await createImageBitmap(originalBlob);
-        if (bitmap.width <= 1600 && bitmap.height <= 1600) {
-          // Ya esta dentro del tamano objetivo, no hace falta volver a subirla
-          skippedCount++;
-          done++;
-          return;
-        }
-        const { blob, ext, type } = await encodeBitmap(bitmap);
-        const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
-        const file = new File([blob], path, { type });
-        const { error: uploadError } = await supabase.storage.from('product-images').upload(path, file);
-        if (uploadError) throw uploadError;
-        const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-        const oldPath = url.split('/product-images/')[1];
-        if (oldPath) await supabase.storage.from('product-images').remove([oldPath]);
-        refsByUrl.get(url).forEach((ref) => {
-          resultsByProductId[ref.p.id][ref.idx] = pub.publicUrl;
-        });
-        resizedCount++;
+        urls[i] = await uploadPhoto(f);
       } catch (err) {
-        errorCount++;
-        if (!firstErrorMsg) firstErrorMsg = (err && err.message) ? err.message : String(err);
-        console.error('Error comprimiendo foto:', url, err);
+        if (!failure) failure = err;
       }
-      done++;
     });
-
-    for (const p of products) {
-      const changed = JSON.stringify(resultsByProductId[p.id]) !== JSON.stringify(p.image_urls || []);
-      if (changed) {
-        await supabase.from('products').update({ image_urls: resultsByProductId[p.id] }).eq('id', p.id);
-      }
+    if (failure) {
+      await removePhotos(urls.filter(Boolean));
+      throw failure;
     }
+    return urls;
+  }
 
-    setCompressLog(
-      resizedCount + ' foto(s) reducida(s) de tamano. ' + skippedCount + ' ya estaban dentro del limite (1600px).'
-        + (errorCount > 0 ? ' ' + errorCount + ' con error. Detalle: ' + firstErrorMsg : '')
-    );
-    setCompressing(false);
-    loadProducts();
+  async function removePhotos(urls) {
+    const paths = [];
+    urls.forEach((u) => {
+      const path = storagePath(u);
+      if (!path) return;
+      paths.push(path);
+      const thumbPath = storagePath(thumbUrl(u));
+      if (thumbPath && thumbPath !== path) paths.push(thumbPath);
+    });
+    if (paths.length > 0) await supabase.storage.from('product-images').remove(paths);
+  }
+
+  // Borra del storage solo las fotos que ya no usa NINGUN producto. Un
+  // producto duplicado comparte los mismos archivos que el original: antes,
+  // borrar la copia borraba tambien las fotos del original. Se relee la base
+  // justo antes, por si se edito algo desde otro dispositivo.
+  async function removeUnusedPhotos(urls) {
+    if (!urls || urls.length === 0) return;
+    const { data, error } = await supabase.from('products').select('image_urls');
+    if (error) return; // ante la duda, no se borra nada
+    const inUse = new Set();
+    (data || []).forEach((p) => (p.image_urls || []).forEach((u) => inUse.add(u)));
+    await removePhotos(urls.filter((u) => !inUse.has(u)));
   }
 
   async function addCategory() {
@@ -489,16 +372,7 @@ export default function Admin() {
 
     let image_urls = [];
     try {
-      image_urls = await Promise.all(
-        files.map(async (f) => {
-          const ext = f.name.split('.').pop();
-          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
-          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, f);
-          if (uploadError) throw uploadError;
-          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-          return pub.publicUrl;
-        })
-      );
+      image_urls = await uploadPhotos(files);
 
       const { error: insertError } = await supabase.from('products').insert({
         name,
@@ -511,7 +385,11 @@ export default function Admin() {
         sold: false,
         sort_order: nextTopSortOrder(),
       });
-      if (insertError) throw insertError;
+      if (insertError) {
+        // El producto no se creo: las fotos recien subidas no las usa nadie.
+        await removePhotos(image_urls);
+        throw insertError;
+      }
 
       setStatus({ type: 'ok', msg: 'Producto agregado' });
       setName('');
@@ -523,6 +401,7 @@ export default function Admin() {
       setSelectedCats([]);
       setFiles([]);
       loadProducts();
+      loadStorage();
     } catch (err) {
       setStatus({ type: 'error', msg: 'Error: ' + err.message });
     } finally {
@@ -532,11 +411,14 @@ export default function Admin() {
 
   async function handleDelete(p) {
     if (!confirm('\u00bfBorrar "' + p.name + '"?')) return;
-    await supabase.from('products').delete().eq('id', p.id);
-    const urls = p.image_urls || [];
-    const paths = urls.map((u) => u.split('/product-images/')[1]).filter(Boolean);
-    if (paths.length > 0) await supabase.storage.from('product-images').remove(paths);
+    const { error } = await supabase.from('products').delete().eq('id', p.id);
+    if (error) {
+      setStatus({ type: 'error', msg: 'Error al borrar: ' + error.message });
+      return;
+    }
+    await removeUnusedPhotos(p.image_urls || []);
     loadProducts();
+    loadStorage();
   }
 
   async function toggleSold(p) {
@@ -588,17 +470,9 @@ export default function Admin() {
   async function saveEdit(id) {
     setStatus(null);
     try {
-      const finalUrls = await Promise.all(
-        editPhotos.map(async (item) => {
-          if (item.kind === 'existing') return item.url;
-          const ext = item.file.name.split('.').pop();
-          const path = Date.now() + '-' + Math.random().toString(36).slice(2) + '.' + ext;
-          const { error: uploadError } = await supabase.storage.from('product-images').upload(path, item.file);
-          if (uploadError) throw uploadError;
-          const { data: pub } = supabase.storage.from('product-images').getPublicUrl(path);
-          return pub.publicUrl;
-        })
-      );
+      const newUrls = await uploadPhotos(editPhotos.filter((item) => item.kind !== 'existing').map((item) => item.file));
+      let nextNew = 0;
+      const finalUrls = editPhotos.map((item) => (item.kind === 'existing' ? item.url : newUrls[nextNew++]));
 
       const { error } = await supabase
         .from('products')
@@ -613,17 +487,49 @@ export default function Admin() {
           image_urls: finalUrls,
         })
         .eq('id', id);
-      if (error) throw error;
+      if (error) {
+        await removePhotos(newUrls);
+        throw error;
+      }
 
-      const pathsToRemove = editRemovedUrls.map((u) => u.split('/product-images/')[1]).filter(Boolean);
-      if (pathsToRemove.length > 0) await supabase.storage.from('product-images').remove(pathsToRemove);
+      await removeUnusedPhotos(editRemovedUrls);
 
       setEditingId(null);
       loadProducts();
+      loadStorage();
     } catch (err) {
       setStatus({ type: 'error', msg: 'Error: ' + err.message });
     }
   }
+
+  function formatMB(bytes) {
+    return Math.round(bytes / (1024 * 1024)) + ' MB';
+  }
+
+  const storageUsed = storageSizes ? Object.values(storageSizes).reduce((a, b) => a + b, 0) : 0;
+  const storagePct = Math.round((storageUsed / STORAGE_LIMIT_BYTES) * 100);
+  const storageColor = storagePct >= 90 ? '#e33' : storagePct >= 80 ? '#e08a00' : '#25D366';
+
+  // Sugerencias de que borrar: productos vendidos, los mas antiguos primero,
+  // con cuanto espacio liberaria cada uno. No se cuentan las fotos que
+  // comparte con un producto disponible (por ejemplo, un duplicado), porque
+  // esas no se borrarian.
+  const deleteSuggestions = useMemo(() => {
+    if (!storageSizes) return [];
+    const usedByAvailable = new Set();
+    products.forEach((p) => { if (!p.sold) (p.image_urls || []).forEach((u) => usedByAvailable.add(u)); });
+    const sizeOf = (u) => {
+      const path = storagePath(u);
+      const thumbPath = storagePath(thumbUrl(u));
+      return (storageSizes[path] || 0) + (thumbPath !== path ? storageSizes[thumbPath] || 0 : 0);
+    };
+    return products
+      .filter((p) => p.sold)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      .map((p) => ({ p, bytes: (p.image_urls || []).filter((u) => !usedByAvailable.has(u)).reduce((s, u) => s + sizeOf(u), 0) }))
+      .filter((x) => x.bytes > 0)
+      .slice(0, 5);
+  }, [products, storageSizes]);
 
   if (!unlocked) {
     return (
@@ -650,34 +556,46 @@ export default function Admin() {
   return (
     <div className="admin-wrap">
       <div className="admin-card">
-        <h1>Herramientas</h1>
-        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
-          {'Convierte y comprime las fotos que hayas subido antes en otro formato o que hayan quedado mal (JPG viejo sin comprimir, HEIC, PNG, WebP, etc), y revisa una por una si realmente cargan bien (a veces una queda rota por dentro aunque diga .jpg).'}
-        </p>
-        <button
-          type="button"
-          onClick={migrateHeicPhotos}
-          disabled={migrating}
-          style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
-        >
-          {migrating ? 'Convirtiendo...' : 'Convertir y comprimir fotos pendientes'}
-        </button>
-        {migrateLog && <p style={{ fontSize: 13, marginTop: 10 }}>{migrateLog}</p>}
-
-        <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid #eee' }} />
-
-        <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 10 }}>
-          {'Reduce el tamano de las fotos que ya estan en el catalogo (subidas antes de que empezaramos a comprimir automaticamente). Las deja igual de nitidas pero mucho mas livianas, sin tocar las que ya estan bien.'}
-        </p>
-        <button
-          type="button"
-          onClick={compressExistingPhotos}
-          disabled={compressing}
-          style={{ background: 'var(--fg)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
-        >
-          {compressing ? 'Comprimiendo...' : 'Reducir tamano de fotos existentes'}
-        </button>
-        {compressLog && <p style={{ fontSize: 13, marginTop: 10 }}>{compressLog}</p>}
+        <h1>Espacio de fotos</h1>
+        {storageSizes === null ? (
+          <p style={{ fontSize: 13, opacity: 0.6 }}>Calculando...</p>
+        ) : (
+          <>
+            <div style={{ background: '#eee', borderRadius: 999, height: 12, overflow: 'hidden' }}>
+              <div style={{ width: Math.min(storagePct, 100) + '%', background: storageColor, height: '100%' }} />
+            </div>
+            <p style={{ fontSize: 13, marginTop: 8 }}>
+              {formatMB(storageUsed) + ' de 1 GB usados (' + storagePct + '%)'}
+            </p>
+            {storagePct >= 80 ? (
+              <>
+                <p style={{ fontSize: 13, color: storageColor, fontWeight: 700, marginTop: 10 }}>
+                  {storagePct >= 90
+                    ? 'Casi lleno: si se llena, la web puede dejar de mostrar las fotos. Borra productos vendidos.'
+                    : 'Se está llenando. Conviene borrar productos vendidos antiguos:'}
+                </p>
+                {deleteSuggestions.map(({ p, bytes }) => (
+                  <div key={p.id} className="admin-list-item">
+                    <div className="info">
+                      <div className="name">{p.name.replace(/\*/g, '')}</div>
+                      <div className="meta">
+                        {'Vendido · subido el ' + new Date(p.created_at).toLocaleDateString('es-PE') + ' · libera ' + formatMB(bytes)}
+                      </div>
+                    </div>
+                    <button onClick={() => handleDelete(p)}>Borrar</button>
+                  </div>
+                ))}
+                {deleteSuggestions.length === 0 && (
+                  <p style={{ fontSize: 12, opacity: 0.6 }}>{'No hay productos vendidos para borrar.'}</p>
+                )}
+              </>
+            ) : (
+              <p style={{ fontSize: 12, opacity: 0.6 }}>
+                {'Hay espacio de sobra. Cuando pase del 80%, aquí aparecerán los productos vendidos que conviene borrar.'}
+              </p>
+            )}
+          </>
+        )}
       </div>
 
       <div className="admin-card">
@@ -890,7 +808,7 @@ export default function Admin() {
           >
             <div className="admin-list-item">
               {reorderEnabled && <span className="drag-handle" title="Arrastra para reordenar">{'\u2630'}</span>}
-              {p.image_urls && p.image_urls[0] ? <img src={p.image_urls[0]} alt={p.name} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--pill-bg)' }} />}
+              {p.image_urls && p.image_urls[0] ? <img src={thumbUrl(p.image_urls[0])} alt={p.name} loading="lazy" /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: 'var(--pill-bg)' }} />}
               <div className="info">
                 <div className="name">{p.name} {p.sold && <span className="sold-tag">VENDIDO</span>}</div>
                 <div className="meta">
