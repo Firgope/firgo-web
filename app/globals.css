@@ -41,7 +41,7 @@ header{padding:0 0 10px;}
   font-size:13px; font-family:inherit; color:var(--fg); font-weight:600; outline:none; background:#fff;
 }
 
-.cats{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:26px;}
+.cats{display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; margin-bottom:26px;}
 .cat-btn{
   background:var(--pill-bg); border:2px solid transparent; color:var(--fg);
   padding:9px 18px; border-radius:999px; font-weight:600; font-size:13px;
@@ -50,6 +50,26 @@ header{padding:0 0 10px;}
 .cat-btn.active{background:var(--fg); color:#fff;}
 .cat-btn.sale{background:#FF1493; color:#fff; font-weight:700;}
 .cat-btn.sale.active{background:#c20d72;}
+
+/* Boton Navidad (categoria con color 'navidad'): verde con borde rojo y luces
+   enredadas en las puntas. Dentro de la categoria se ve igual. Las luces se
+   salen del boton, por eso lleva margen a los lados y abajo, y la fila un
+   poco de aire arriba. Medidas en em para que crezcan con la letra. */
+.cats:has(.navidad){padding-top:10px;}
+.cat-btn.navidad, .cat-btn.navidad.active{background:#1F7A3A; color:#fff; font-weight:800; border-color:#C4122F;}
+.cat-btn.navidad{position:relative; margin:0 .9em 2.3em;}
+.luces{position:absolute; left:-.9em; right:-.9em; top:-.7em; bottom:-1.9em; pointer-events:none;}
+.luces svg{display:block; width:100%; height:100%; overflow:visible;}
+.luces path{fill:none; stroke:#0d2b19; stroke-width:1.6; stroke-linecap:round;}
+.luces i{position:absolute; width:.5em; height:1em; margin-left:-.25em; transform:rotate(var(--r)) scale(var(--s)); transform-origin:50% 0;}
+.luces i::before{content:''; position:absolute; top:0; left:.12em; width:.26em; height:.24em; background:#23412d; border-radius:.05em;}
+.luces i::after{
+  content:''; position:absolute; top:.2em; left:0; width:.5em; height:.76em; background:var(--c);
+  border-radius:50% 50% 50% 50% / 40% 40% 60% 60%; box-shadow:0 0 .45em .08em var(--c);
+  animation:titila var(--t) ease-in-out var(--d) infinite;
+}
+@keyframes titila{0%,100%{opacity:1;} 50%{opacity:.3; box-shadow:none;}}
+@media (prefers-reduced-motion: reduce){ .luces i::after{animation:none;} }
 
 .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:16px;}
 @media (max-width:640px){

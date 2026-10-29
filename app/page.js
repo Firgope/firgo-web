@@ -29,6 +29,50 @@ function ThumbImage({ src, alt }) {
   );
 }
 
+// Luces de Navidad enredadas en las puntas del boton de la categoria con
+// color 'navidad'. Son dibujo (un cable SVG + focos hechos con CSS), no
+// fotos: no agregan nada que descargar. El cable va en una caja de 120x60
+// que se sale del boton por los costados y por abajo. Cada foco es
+// [izquierda %, arriba %, giro, color, segundos de titileo, desfase, tamano];
+// duraciones y desfases distintos para que no prendan todos a la vez.
+const LUCES_CABLE =
+  'M2 0 C8 3 12 5 16 11 C21 19 19 31 27 41 C33 50 44 54 52 49 C57 46 60 44 63 41 ' +
+  'M80 8 C84 2 92 0 98 4 C104 8 106 16 102 24 C99 30 96 36 95 40 C95 46 102 54 110 52 C117 50 119 44 114 42 C109 40 108 48 113 57 ' +
+  'M34 8 C30 2 22 -1 14 3 C6 7 3 14 6 22 C8 30 4 38 9 44 C13 50 22 50 30 46 C38 42 42 46 40 53';
+const LUCES_FOCOS = [
+  [8.2, 7.3, 150, '#FF4040', 1.3, 0, 1.08],
+  [17.0, 42.2, -35, '#45B0FF', 2.1, 0.9, 0.85],
+  [32.3, 83.8, 15, '#FFC83D', 1.7, 0.3, 1],
+  [43.3, 81.7, -25, '#FF8A2B', 2.6, 1.6, 1],
+  [73.6, 3.8, 195, '#FF66C4', 1.1, 0.6, 0.85],
+  [86.5, 20.8, -95, '#FFC83D', 1.9, 1.2, 1],
+  [82.9, 81.7, 30, '#FF4040', 2.4, 0.1, 1],
+  [97.1, 78.3, -60, '#FF66C4', 1.5, 2.0, 0.85],
+  [94.2, 95.0, -8, '#45B0FF', 2.8, 0.7, 1.08],
+  [21.3, 3.0, 165, '#FF8A2B', 1.2, 1.4, 1],
+  [4.9, 18.3, 70, '#FFC83D', 2.2, 0.4, 0.85],
+  [15.0, 81.3, 20, '#FF66C4', 1.6, 1.8, 1],
+];
+
+function Luces() {
+  return (
+    <span className="luces" aria-hidden="true">
+      <svg viewBox="0 0 120 60" preserveAspectRatio="none">
+        <path vectorEffect="non-scaling-stroke" d={LUCES_CABLE} />
+      </svg>
+      {LUCES_FOCOS.map((f, i) => (
+        <i
+          key={i}
+          style={{
+            left: f[0] + '%', top: f[1] + '%',
+            '--r': f[2] + 'deg', '--c': f[3], '--t': f[4] + 's', '--d': f[5] + 's', '--s': String(f[6]),
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export default function Home() {
   const [products, setProducts] = useState([]);
   const [cats, setCats] = useState([]);
@@ -291,10 +335,11 @@ export default function Home() {
             {cats.map((c) => (
               <button
                 key={c.id}
-                className={'cat-btn ' + (c.color === 'pink' ? 'sale' : '') + ' ' + (activeCat === c.id ? 'active' : '')}
+                className={'cat-btn ' + (c.color === 'pink' ? 'sale' : '') + (c.color === 'navidad' ? 'navidad' : '') + ' ' + (activeCat === c.id ? 'active' : '')}
                 onClick={() => setActiveCat(c.id)}
               >
                 {c.label}
+                {c.color === 'navidad' && <Luces />}
               </button>
             ))}
           </div>
